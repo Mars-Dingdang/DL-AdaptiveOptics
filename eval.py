@@ -1,11 +1,12 @@
 """Unified evaluation script for restoration checkpoints.
 
-This script evaluates either U-Net or GAN checkpoints on a validation split and
-reports PSNR/SSIM/LPIPS metrics. It can also export side-by-side result images.
+This script evaluates either U-Net or GAN checkpoints on a requested split
+(validation or test), reports PSNR/SSIM/LPIPS metrics, and can optionally
+export side-by-side result images.
 
 Usage examples:
-    python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt
-    python eval.py --config configs/default.yaml --checkpoint checkpoints/best_gan.pt --save-images
+    python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --split val
+    python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --split test
 """
 
 from __future__ import annotations
@@ -40,6 +41,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"), help="Config path")
     parser.add_argument("--checkpoint", type=Path, required=True, help="Checkpoint file path")
     parser.add_argument(
+        "--split",
+        type=str,
+        default="val",
+        choices=["val", "test"],
+        help="Evaluation split. 'val' is for model selection, 'test' is for final report.",
+    )
+    parser.add_argument(
         "--model-type",
         type=str,
         default="",
@@ -54,30 +62,50 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_eval_loader(cfg: dict[str, Any], seed: int, batch_size_override: int, workers_override: int) -> DataLoader[Any]:
-    """Build evaluation dataloader from val_root or split from train_root."""
+def build_eval_loader(
+    cfg: dict[str, Any],
+    seed: int,
+    split: str,
+    batch_size_override: int,
+    workers_override: int,
+) -> DataLoader[Any]:
+    """Build evaluation dataloader from requested split.
+
+    - split=val: use val_root if provided, otherwise split from train_root.
+    - split=test: must use dedicated test_root.
+    """
     data_cfg = cfg["data"]
     train_root = Path(data_cfg["train_root"])
     val_root_str = str(data_cfg.get("val_root", "")).strip()
+    test_root_str = str(data_cfg.get("test_root", "")).strip()
 
     turbulence_params = build_turbulence_params(cfg)
-    val_params = DatasetParams(
+    eval_params = DatasetParams(
         image_size=int(data_cfg["image_size"]),
         random_crop=False,
         horizontal_flip_prob=0.0,
     )
 
-    if val_root_str:
-        val_ds = TurbulencePairDataset(
-            root_dir=Path(val_root_str),
-            dataset_params=val_params,
+    if split == "test":
+        if not test_root_str:
+            raise RuntimeError("split=test requires data.test_root in config.")
+        eval_ds: Any = TurbulencePairDataset(
+            root_dir=Path(test_root_str),
+            dataset_params=eval_params,
             turbulence_params=turbulence_params,
             seed=seed + 1,
         )
-    else:
+    elif split == "val" and val_root_str:
+        eval_ds = TurbulencePairDataset(
+            root_dir=Path(val_root_str),
+            dataset_params=eval_params,
+            turbulence_params=turbulence_params,
+            seed=seed + 1,
+        )
+    elif split == "val":
         full_ds = TurbulencePairDataset(
             root_dir=train_root,
-            dataset_params=val_params,
+            dataset_params=eval_params,
             turbulence_params=turbulence_params,
             seed=seed + 1,
         )
@@ -93,7 +121,9 @@ def build_eval_loader(cfg: dict[str, Any], seed: int, batch_size_override: int, 
         rng = np.random.default_rng(seed)
         rng.shuffle(indices)
         val_idx = indices[:n_val].tolist()
-        val_ds = Subset(full_ds, val_idx)
+        eval_ds = Subset(full_ds, val_idx)
+    else:
+        raise ValueError(f"Unsupported split: {split}")
 
     batch_size = int(data_cfg.get("val_batch_size", data_cfg["batch_size"]))
     if batch_size_override > 0:
@@ -104,7 +134,7 @@ def build_eval_loader(cfg: dict[str, Any], seed: int, batch_size_override: int, 
         num_workers = workers_override
 
     loader = DataLoader(
-        val_ds,
+        eval_ds,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -138,10 +168,11 @@ def main() -> None:
     loader = build_eval_loader(
         cfg=cfg,
         seed=seed,
+        split=args.split,
         batch_size_override=int(args.batch_size),
         workers_override=int(args.num_workers),
     )
-    print(f"[INFO] Eval batches: {len(loader)}")
+    print(f"[INFO] Eval split: {args.split}, batches: {len(loader)}")
 
     ckpt_path = args.checkpoint
     if not ckpt_path.exists():
@@ -257,6 +288,7 @@ def main() -> None:
     with report_path.open("w", encoding="utf-8") as f:
         f.write(f"checkpoint: {ckpt_path}\n")
         f.write(f"model_type: {model_type}\n")
+        f.write(f"split: {args.split}\n")
         f.write(f"batches: {n_batches}\n")
         for k, v in sorted(mean_stats.items()):
             f.write(f"{k}: {v:.6f}\n")

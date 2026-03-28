@@ -3,3 +3,4 @@
 *.pyc
 *.pyo
 *.pyd
+/data/raw/UCMerced_LandUse

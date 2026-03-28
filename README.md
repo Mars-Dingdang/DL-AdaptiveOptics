@@ -367,19 +367,35 @@ python train.py --config configs/train_gan.yaml
 评估 U-Net：
 
 ```powershell
-python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --save-images --out-dir outputs/eval_unet
+python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --split val --save-images --out-dir outputs/eval_unet
 ```
 
 评估 GAN：
 
 ```powershell
-python eval.py --config configs/default.yaml --checkpoint checkpoints/best_gan.pt --model-type gan --save-images --out-dir outputs/eval_gan
+python eval.py --config configs/default.yaml --checkpoint checkpoints/best_gan.pt --model-type gan --split val --save-images --out-dir outputs/eval_gan
+```
+
+最终测试集评估（仅在模型定版后运行）：
+
+```powershell
+python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --split test --save-images --out-dir outputs/eval_unet_test
 ```
 
 评估结果：
 
 - outputs/eval_*/metrics.txt
 - outputs/eval_*/samples/*.png
+
+### 4.9.1 独立验证/测试协议
+
+- 训练阶段：
+  - train_root 用于训练
+  - val_root 用于模型选择（若 val_root 为空才用 val_ratio 从 train_root 切分）
+- 最终报告阶段：
+  - test_root 仅用于 split=test 的一次性最终评估
+- 重要约束：
+  - test_root 不应与 train_root 或 val_root 指向同一目录
 
 ### 4.10 启动 Demo
 
@@ -541,13 +557,19 @@ sed -i '' 's/type: unet/type: gan/' configs/train_gan.yaml
 评估 U-Net：
 
 ```bash
-python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --save-images --out-dir outputs/eval_unet
+python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --split val --save-images --out-dir outputs/eval_unet
 ```
 
 评估 GAN：
 
 ```bash
-python eval.py --config configs/default.yaml --checkpoint checkpoints/best_gan.pt --model-type gan --save-images --out-dir outputs/eval_gan
+python eval.py --config configs/default.yaml --checkpoint checkpoints/best_gan.pt --model-type gan --split val --save-images --out-dir outputs/eval_gan
+```
+
+最终测试集评估（模型定版后仅运行一次）：
+
+```bash
+python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --split test --save-images --out-dir outputs/eval_unet_test
 ```
 
 ### 8.10 启动 Demo
