@@ -1,0 +1,15 @@
+numpy>=1.24
+opencv-python>=4.9
+matplotlib>=3.8
+PyYAML>=6.0
+scikit-image>=0.22
+lpips>=0.1.4
+
+# Core DL stack
+# Install a torch build matching your CUDA runtime when needed.
+torch>=2.2
+torchvision>=0.17
+
+# Demo
+gradio>=4.44
+gradio-imageslider>=0.0.20

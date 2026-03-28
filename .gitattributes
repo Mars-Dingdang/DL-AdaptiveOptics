@@ -1,0 +1,2 @@
+checkpoints/best_unet.pt filter=lfs diff=lfs merge=lfs -text
+data/raw/UCMerced_LandUse.zip filter=lfs diff=lfs merge=lfs -text
