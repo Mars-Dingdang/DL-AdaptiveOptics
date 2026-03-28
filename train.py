@@ -1,0 +1,681 @@
+"""Unified training script for turbulence restoration.
+
+Supported model types:
+- unet: baseline supervised restoration with L1 objective.
+- gan: Pix2Pix-style conditional GAN with optional physics consistency.
+
+Usage:
+    python train.py --config configs/default.yaml
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from dataclasses import asdict
+from pathlib import Path
+import argparse
+import copy
+import random
+from typing import Any
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.optim import Adam
+from torch.optim.lr_scheduler import StepLR
+from torch.utils.data import DataLoader, Dataset, Subset
+import yaml
+
+from data.dataset import DatasetParams, TurbulencePairDataset
+from modules.baseline_unet import build_baseline_unet
+from modules.gan_models import (
+    GANLossWeights,
+    build_pix2pix_models,
+    discriminator_loss,
+    generator_total_loss,
+)
+from utils.degradation import TurbulenceParams
+from utils.metrics import RestorationMetrics
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments."""
+    parser = argparse.ArgumentParser(description="Train restoration models for atmospheric turbulence removal.")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/default.yaml"),
+        help="Path to YAML configuration file.",
+    )
+    return parser.parse_args()
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    """Load YAML config into dict."""
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+    with path.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    if not isinstance(cfg, dict):
+        raise RuntimeError("Config root must be a dictionary")
+    return cfg
+
+
+def set_seed(seed: int) -> None:
+    """Set random seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def resolve_device(device_cfg: str) -> torch.device:
+    """Resolve runtime device from config string."""
+    value = device_cfg.lower().strip()
+    if value == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if value in {"cuda", "cpu"}:
+        if value == "cuda" and not torch.cuda.is_available():
+            print("[WARN] CUDA requested but not available, falling back to CPU.")
+            return torch.device("cpu")
+        return torch.device(value)
+    raise ValueError(f"Unsupported device config: {device_cfg}")
+
+
+def to_minus1_1(x: torch.Tensor) -> torch.Tensor:
+    """Convert [0,1] tensor to [-1,1]."""
+    return x * 2.0 - 1.0
+
+
+def to_0_1(x: torch.Tensor) -> torch.Tensor:
+    """Convert [-1,1] tensor to [0,1]."""
+    return ((x + 1.0) * 0.5).clamp(0.0, 1.0)
+
+
+def build_turbulence_params(cfg: dict[str, Any]) -> TurbulenceParams:
+    """Build turbulence parameters from config."""
+    dcfg = cfg["degradation"]
+    return TurbulenceParams(
+        zernike_order=int(dcfg["zernike_order"]),
+        phase_strength=float(dcfg["phase_strength"]),
+        psf_kernel_size=int(dcfg["psf_kernel_size"]),
+        gaussian_sigma_range=(float(dcfg["gaussian_sigma_range"][0]), float(dcfg["gaussian_sigma_range"][1])),
+        motion_blur_prob=float(dcfg["motion_blur_prob"]),
+        motion_blur_kernel_range=(int(dcfg["motion_blur_kernel_range"][0]), int(dcfg["motion_blur_kernel_range"][1])),
+        poisson_scale_range=(float(dcfg["poisson_scale_range"][0]), float(dcfg["poisson_scale_range"][1])),
+        gaussian_noise_std_range=(
+            float(dcfg["gaussian_noise_std_range"][0]),
+            float(dcfg["gaussian_noise_std_range"][1]),
+        ),
+        jpeg_quality_range=(int(dcfg["jpeg_quality_range"][0]), int(dcfg["jpeg_quality_range"][1])),
+    )
+
+
+def build_datasets(cfg: dict[str, Any], seed: int) -> tuple[Dataset[Any], Dataset[Any]]:
+    """Create train/val datasets from config.
+
+    If val_root is empty, split train_root by val_ratio.
+    """
+    data_cfg = cfg["data"]
+    turbulence_params = build_turbulence_params(cfg)
+
+    train_root = Path(data_cfg["train_root"])
+    val_root_str = str(data_cfg.get("val_root", "")).strip()
+
+    train_ds_params = DatasetParams(
+        image_size=int(data_cfg["image_size"]),
+        random_crop=bool(data_cfg["random_crop"]),
+        horizontal_flip_prob=float(data_cfg["horizontal_flip_prob"]),
+    )
+    val_ds_params = DatasetParams(
+        image_size=int(data_cfg["image_size"]),
+        random_crop=False,
+        horizontal_flip_prob=0.0,
+    )
+
+    train_full = TurbulencePairDataset(
+        root_dir=train_root,
+        dataset_params=train_ds_params,
+        turbulence_params=turbulence_params,
+        seed=seed,
+    )
+
+    if val_root_str:
+        val_root = Path(val_root_str)
+        val_ds = TurbulencePairDataset(
+            root_dir=val_root,
+            dataset_params=val_ds_params,
+            turbulence_params=turbulence_params,
+            seed=seed + 1,
+        )
+        return train_full, val_ds
+
+    n_total = len(train_full)
+    if n_total < 2:
+        raise RuntimeError("Need at least 2 images for train/val split.")
+
+    val_ratio = float(data_cfg.get("val_ratio", 0.1))
+    val_ratio = min(max(val_ratio, 0.01), 0.5)
+    n_val = max(1, int(round(n_total * val_ratio)))
+    n_train = max(1, n_total - n_val)
+    if n_train + n_val > n_total:
+        n_val = n_total - n_train
+
+    indices = np.arange(n_total)
+    rng = np.random.default_rng(seed)
+    rng.shuffle(indices)
+
+    val_idx = indices[:n_val].tolist()
+    train_idx = indices[n_val : n_val + n_train].tolist()
+
+    val_full = TurbulencePairDataset(
+        root_dir=train_root,
+        dataset_params=val_ds_params,
+        turbulence_params=turbulence_params,
+        seed=seed + 1,
+    )
+
+    train_ds = Subset(train_full, train_idx)
+    val_ds = Subset(val_full, val_idx)
+    return train_ds, val_ds
+
+
+def build_dataloaders(cfg: dict[str, Any], seed: int) -> tuple[DataLoader[Any], DataLoader[Any]]:
+    """Build train and validation dataloaders."""
+    data_cfg = cfg["data"]
+    train_ds, val_ds = build_datasets(cfg=cfg, seed=seed)
+
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=int(data_cfg["batch_size"]),
+        shuffle=True,
+        num_workers=int(data_cfg["num_workers"]),
+        pin_memory=bool(data_cfg["pin_memory"]),
+        drop_last=True,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=int(data_cfg.get("val_batch_size", data_cfg["batch_size"])),
+        shuffle=False,
+        num_workers=int(data_cfg["num_workers"]),
+        pin_memory=bool(data_cfg["pin_memory"]),
+        drop_last=False,
+    )
+    return train_loader, val_loader
+
+
+def _mean_stats(sum_stats: dict[str, float], count: int) -> dict[str, float]:
+    """Convert sum stats to mean stats."""
+    if count <= 0:
+        return {k: 0.0 for k in sum_stats}
+    return {k: v / float(count) for k, v in sum_stats.items()}
+
+
+def train_one_epoch_unet(
+    model: nn.Module,
+    loader: DataLoader[Any],
+    optimizer: torch.optim.Optimizer,
+    criterion: nn.Module,
+    metrics: RestorationMetrics,
+    device: torch.device,
+    epoch: int,
+    log_interval: int,
+    max_grad_norm: float,
+) -> dict[str, float]:
+    """Train U-Net for one epoch."""
+    model.train()
+
+    sum_stats: dict[str, float] = defaultdict(float)
+    n_batches = 0
+
+    for step, batch in enumerate(loader, start=1):
+        degraded, clear = batch
+        degraded = degraded.to(device, non_blocking=True)
+        clear = clear.to(device, non_blocking=True)
+
+        pred = model(degraded)
+        pred_01 = pred.clamp(0.0, 1.0)
+
+        loss = criterion(pred_01, clear)
+
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        if max_grad_norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
+        optimizer.step()
+
+        batch_metrics = metrics.compute_batch(pred=pred_01.detach(), target=clear.detach())
+
+        sum_stats["loss"] += float(loss.detach().item())
+        for k, v in batch_metrics.items():
+            sum_stats[k] += float(v)
+        n_batches += 1
+
+        if log_interval > 0 and (step % log_interval == 0 or step == len(loader)):
+            log_msg = (
+                f"[Train][UNet] epoch={epoch} step={step}/{len(loader)} "
+                f"loss={loss.detach().item():.4f} psnr={batch_metrics['psnr']:.3f} "
+                f"ssim={batch_metrics['ssim']:.4f}"
+            )
+            if "lpips" in batch_metrics:
+                log_msg += f" lpips={batch_metrics['lpips']:.4f}"
+            print(log_msg)
+
+    return _mean_stats(sum_stats, n_batches)
+
+
+@torch.no_grad()
+def evaluate_unet(
+    model: nn.Module,
+    loader: DataLoader[Any],
+    criterion: nn.Module,
+    metrics: RestorationMetrics,
+    device: torch.device,
+) -> dict[str, float]:
+    """Evaluate U-Net model."""
+    model.eval()
+
+    sum_stats: dict[str, float] = defaultdict(float)
+    n_batches = 0
+
+    for degraded, clear in loader:
+        degraded = degraded.to(device, non_blocking=True)
+        clear = clear.to(device, non_blocking=True)
+
+        pred = model(degraded)
+        pred_01 = pred.clamp(0.0, 1.0)
+
+        loss = criterion(pred_01, clear)
+        batch_metrics = metrics.compute_batch(pred=pred_01, target=clear)
+
+        sum_stats["loss"] += float(loss.detach().item())
+        for k, v in batch_metrics.items():
+            sum_stats[k] += float(v)
+        n_batches += 1
+
+    return _mean_stats(sum_stats, n_batches)
+
+
+def train_one_epoch_gan(
+    generator: nn.Module,
+    discriminator: nn.Module,
+    loader: DataLoader[Any],
+    optimizer_g: torch.optim.Optimizer,
+    optimizer_d: torch.optim.Optimizer,
+    l1_weight: float,
+    gan_weights: GANLossWeights,
+    metrics: RestorationMetrics,
+    device: torch.device,
+    epoch: int,
+    log_interval: int,
+    max_grad_norm: float,
+) -> dict[str, float]:
+    """Train conditional GAN for one epoch."""
+    generator.train()
+    discriminator.train()
+
+    sum_stats: dict[str, float] = defaultdict(float)
+    n_batches = 0
+
+    for step, batch in enumerate(loader, start=1):
+        degraded, clear = batch
+        degraded = degraded.to(device, non_blocking=True)
+        clear = clear.to(device, non_blocking=True)
+
+        degraded_n = to_minus1_1(degraded)
+        clear_n = to_minus1_1(clear)
+
+        # Update discriminator.
+        with torch.no_grad():
+            fake_clear_detached = generator(degraded_n)
+
+        pred_real = discriminator(degraded_n, clear_n)
+        pred_fake = discriminator(degraded_n, fake_clear_detached)
+        loss_d = discriminator_loss(pred_real_logits=pred_real, pred_fake_logits=pred_fake)
+
+        optimizer_d.zero_grad(set_to_none=True)
+        loss_d.backward()
+        if max_grad_norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=max_grad_norm)
+        optimizer_d.step()
+
+        # Update generator.
+        fake_clear = generator(degraded_n)
+        pred_fake_for_g = discriminator(degraded_n, fake_clear)
+
+        loss_g_total, g_stats = generator_total_loss(
+            fake_clear=fake_clear,
+            real_clear=clear_n,
+            degraded_input=degraded_n,
+            pred_fake_logits=pred_fake_for_g,
+            weights=gan_weights,
+        )
+
+        # Keep explicit L1 contribution configurable while retaining GAN module internals.
+        if abs(l1_weight - gan_weights.lambda_l1) > 1e-8:
+            diff = l1_weight - gan_weights.lambda_l1
+            loss_g_total = loss_g_total + diff * torch.nn.functional.l1_loss(fake_clear, clear_n)
+
+        optimizer_g.zero_grad(set_to_none=True)
+        loss_g_total.backward()
+        if max_grad_norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
+        optimizer_g.step()
+
+        fake_01 = to_0_1(fake_clear.detach())
+        batch_metrics = metrics.compute_batch(pred=fake_01, target=clear.detach())
+
+        sum_stats["d_loss"] += float(loss_d.detach().item())
+        sum_stats["g_total"] += float(loss_g_total.detach().item())
+        sum_stats["g_adv"] += float(g_stats["g_adv"])
+        sum_stats["g_l1"] += float(g_stats["g_l1"])
+        sum_stats["g_phy"] += float(g_stats["g_phy"])
+        for k, v in batch_metrics.items():
+            sum_stats[k] += float(v)
+        n_batches += 1
+
+        if log_interval > 0 and (step % log_interval == 0 or step == len(loader)):
+            log_msg = (
+                f"[Train][GAN] epoch={epoch} step={step}/{len(loader)} "
+                f"d={loss_d.detach().item():.4f} g={loss_g_total.detach().item():.4f} "
+                f"psnr={batch_metrics['psnr']:.3f} ssim={batch_metrics['ssim']:.4f}"
+            )
+            if "lpips" in batch_metrics:
+                log_msg += f" lpips={batch_metrics['lpips']:.4f}"
+            print(log_msg)
+
+    return _mean_stats(sum_stats, n_batches)
+
+
+@torch.no_grad()
+def evaluate_gan(
+    generator: nn.Module,
+    discriminator: nn.Module,
+    loader: DataLoader[Any],
+    gan_weights: GANLossWeights,
+    metrics: RestorationMetrics,
+    device: torch.device,
+) -> dict[str, float]:
+    """Evaluate GAN generator/discriminator on validation set."""
+    generator.eval()
+    discriminator.eval()
+
+    sum_stats: dict[str, float] = defaultdict(float)
+    n_batches = 0
+
+    for degraded, clear in loader:
+        degraded = degraded.to(device, non_blocking=True)
+        clear = clear.to(device, non_blocking=True)
+
+        degraded_n = to_minus1_1(degraded)
+        clear_n = to_minus1_1(clear)
+
+        fake_clear = generator(degraded_n)
+        pred_real = discriminator(degraded_n, clear_n)
+        pred_fake = discriminator(degraded_n, fake_clear)
+
+        d_loss = discriminator_loss(pred_real_logits=pred_real, pred_fake_logits=pred_fake)
+        g_total, g_stats = generator_total_loss(
+            fake_clear=fake_clear,
+            real_clear=clear_n,
+            degraded_input=degraded_n,
+            pred_fake_logits=pred_fake,
+            weights=gan_weights,
+        )
+
+        fake_01 = to_0_1(fake_clear)
+        batch_metrics = metrics.compute_batch(pred=fake_01, target=clear)
+
+        sum_stats["d_loss"] += float(d_loss.detach().item())
+        sum_stats["g_total"] += float(g_total.detach().item())
+        sum_stats["g_adv"] += float(g_stats["g_adv"])
+        sum_stats["g_l1"] += float(g_stats["g_l1"])
+        sum_stats["g_phy"] += float(g_stats["g_phy"])
+        for k, v in batch_metrics.items():
+            sum_stats[k] += float(v)
+        n_batches += 1
+
+    return _mean_stats(sum_stats, n_batches)
+
+
+def save_checkpoint(state: dict[str, Any], path: Path) -> None:
+    """Save checkpoint dictionary."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(state, path)
+
+
+def main() -> None:
+    """Main training entrypoint."""
+    args = parse_args()
+    cfg = load_config(args.config)
+
+    seed = int(cfg.get("seed", 42))
+    set_seed(seed)
+
+    device = resolve_device(str(cfg["runtime"].get("device", "auto")))
+    print(f"[INFO] Using device: {device}")
+
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+
+    train_loader, val_loader = build_dataloaders(cfg=cfg, seed=seed)
+    print(f"[INFO] train batches={len(train_loader)}, val batches={len(val_loader)}")
+
+    metrics_cfg = cfg["metrics"]
+    metric_computer = RestorationMetrics(
+        compute_lpips=bool(metrics_cfg.get("compute_lpips", True)),
+        lpips_net=str(metrics_cfg.get("lpips_net", "alex")),
+        device=device,
+    )
+    if metric_computer.lpips.enabled and not metric_computer.lpips.available:
+        print(f"[WARN] LPIPS disabled at runtime: {metric_computer.lpips.error_message}")
+
+    model_cfg = cfg["model"]
+    model_type = str(model_cfg["type"]).lower()
+
+    opt_cfg = cfg["optimizer"]
+    lr = float(opt_cfg["learning_rate"])
+    betas = (float(opt_cfg["beta1"]), float(opt_cfg["beta2"]))
+    weight_decay = float(opt_cfg.get("weight_decay", 0.0))
+
+    train_cfg = cfg["train"]
+    epochs = int(train_cfg["epochs"])
+    log_interval = int(train_cfg.get("log_interval", 20))
+    val_interval = int(train_cfg.get("val_interval", 1))
+    save_interval = int(train_cfg.get("save_interval", 5))
+    max_grad_norm = float(train_cfg.get("max_grad_norm", 0.0))
+
+    ckpt_cfg = cfg["checkpoint"]
+    ckpt_dir = Path(ckpt_cfg.get("dir", "checkpoints"))
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    monitor_name = str(ckpt_cfg.get("monitor", "psnr"))
+    best_value = -1e9
+
+    scheduler_cfg = cfg.get("scheduler", {})
+    use_scheduler = bool(scheduler_cfg.get("enabled", False))
+    step_size = int(scheduler_cfg.get("step_size", 30))
+    gamma = float(scheduler_cfg.get("gamma", 0.5))
+
+    if model_type == "unet":
+        model = build_baseline_unet(
+            in_channels=int(model_cfg.get("in_channels", 3)),
+            out_channels=int(model_cfg.get("out_channels", 3)),
+            base_channels=int(model_cfg.get("base_channels", 64)),
+        ).to(device)
+
+        criterion = nn.L1Loss()
+        optimizer = Adam(model.parameters(), lr=lr, betas=betas, weight_decay=weight_decay)
+        scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma) if use_scheduler else None
+
+        for epoch in range(1, epochs + 1):
+            train_stats = train_one_epoch_unet(
+                model=model,
+                loader=train_loader,
+                optimizer=optimizer,
+                criterion=criterion,
+                metrics=metric_computer,
+                device=device,
+                epoch=epoch,
+                log_interval=log_interval,
+                max_grad_norm=max_grad_norm,
+            )
+
+            if scheduler is not None:
+                scheduler.step()
+
+            print(f"[Epoch {epoch}] train={train_stats}")
+
+            do_val = (val_interval > 0) and (epoch % val_interval == 0)
+            val_stats: dict[str, float] | None = None
+            if do_val:
+                val_stats = evaluate_unet(
+                    model=model,
+                    loader=val_loader,
+                    criterion=criterion,
+                    metrics=metric_computer,
+                    device=device,
+                )
+                print(f"[Epoch {epoch}] val={val_stats}")
+
+                metric_value = float(val_stats.get(monitor_name, -1e9))
+                if metric_value > best_value:
+                    best_value = metric_value
+                    best_path = ckpt_dir / "best_unet.pt"
+                    save_checkpoint(
+                        {
+                            "epoch": epoch,
+                            "model_type": model_type,
+                            "config": copy.deepcopy(cfg),
+                            "model_state": model.state_dict(),
+                            "optimizer_state": optimizer.state_dict(),
+                            "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
+                            "val_stats": val_stats,
+                        },
+                        best_path,
+                    )
+                    print(f"[INFO] Saved new best checkpoint: {best_path} ({monitor_name}={metric_value:.4f})")
+
+            if save_interval > 0 and (epoch % save_interval == 0 or epoch == epochs):
+                last_path = ckpt_dir / f"unet_epoch_{epoch}.pt"
+                save_checkpoint(
+                    {
+                        "epoch": epoch,
+                        "model_type": model_type,
+                        "config": copy.deepcopy(cfg),
+                        "model_state": model.state_dict(),
+                        "optimizer_state": optimizer.state_dict(),
+                        "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
+                        "train_stats": train_stats,
+                    },
+                    last_path,
+                )
+                print(f"[INFO] Saved checkpoint: {last_path}")
+
+        return
+
+    if model_type == "gan":
+        generator, discriminator = build_pix2pix_models(
+            in_channels=int(model_cfg.get("in_channels", 3)),
+            out_channels=int(model_cfg.get("out_channels", 3)),
+            base_channels=int(model_cfg.get("base_channels", 64)),
+        )
+        generator = generator.to(device)
+        discriminator = discriminator.to(device)
+
+        optimizer_g = Adam(generator.parameters(), lr=lr, betas=betas, weight_decay=weight_decay)
+        optimizer_d = Adam(discriminator.parameters(), lr=lr, betas=betas, weight_decay=weight_decay)
+
+        scheduler_g = StepLR(optimizer_g, step_size=step_size, gamma=gamma) if use_scheduler else None
+        scheduler_d = StepLR(optimizer_d, step_size=step_size, gamma=gamma) if use_scheduler else None
+
+        loss_cfg = cfg["loss"]
+        l1_weight = float(loss_cfg.get("l1_weight", 100.0))
+        gan_cfg = loss_cfg.get("gan", {})
+        gan_weights = GANLossWeights(
+            lambda_l1=float(gan_cfg.get("lambda_l1", l1_weight)),
+            lambda_physics=float(gan_cfg.get("lambda_physics", 10.0)),
+        )
+
+        for epoch in range(1, epochs + 1):
+            train_stats = train_one_epoch_gan(
+                generator=generator,
+                discriminator=discriminator,
+                loader=train_loader,
+                optimizer_g=optimizer_g,
+                optimizer_d=optimizer_d,
+                l1_weight=l1_weight,
+                gan_weights=gan_weights,
+                metrics=metric_computer,
+                device=device,
+                epoch=epoch,
+                log_interval=log_interval,
+                max_grad_norm=max_grad_norm,
+            )
+
+            if scheduler_g is not None:
+                scheduler_g.step()
+            if scheduler_d is not None:
+                scheduler_d.step()
+
+            print(f"[Epoch {epoch}] train={train_stats}")
+
+            do_val = (val_interval > 0) and (epoch % val_interval == 0)
+            val_stats: dict[str, float] | None = None
+            if do_val:
+                val_stats = evaluate_gan(
+                    generator=generator,
+                    discriminator=discriminator,
+                    loader=val_loader,
+                    gan_weights=gan_weights,
+                    metrics=metric_computer,
+                    device=device,
+                )
+                print(f"[Epoch {epoch}] val={val_stats}")
+
+                metric_value = float(val_stats.get(monitor_name, -1e9))
+                if metric_value > best_value:
+                    best_value = metric_value
+                    best_path = ckpt_dir / "best_gan.pt"
+                    save_checkpoint(
+                        {
+                            "epoch": epoch,
+                            "model_type": model_type,
+                            "config": copy.deepcopy(cfg),
+                            "generator_state": generator.state_dict(),
+                            "discriminator_state": discriminator.state_dict(),
+                            "optimizer_g_state": optimizer_g.state_dict(),
+                            "optimizer_d_state": optimizer_d.state_dict(),
+                            "scheduler_g_state": scheduler_g.state_dict() if scheduler_g is not None else None,
+                            "scheduler_d_state": scheduler_d.state_dict() if scheduler_d is not None else None,
+                            "val_stats": val_stats,
+                        },
+                        best_path,
+                    )
+                    print(f"[INFO] Saved new best checkpoint: {best_path} ({monitor_name}={metric_value:.4f})")
+
+            if save_interval > 0 and (epoch % save_interval == 0 or epoch == epochs):
+                last_path = ckpt_dir / f"gan_epoch_{epoch}.pt"
+                save_checkpoint(
+                    {
+                        "epoch": epoch,
+                        "model_type": model_type,
+                        "config": copy.deepcopy(cfg),
+                        "generator_state": generator.state_dict(),
+                        "discriminator_state": discriminator.state_dict(),
+                        "optimizer_g_state": optimizer_g.state_dict(),
+                        "optimizer_d_state": optimizer_d.state_dict(),
+                        "scheduler_g_state": scheduler_g.state_dict() if scheduler_g is not None else None,
+                        "scheduler_d_state": scheduler_d.state_dict() if scheduler_d is not None else None,
+                        "train_stats": train_stats,
+                    },
+                    last_path,
+                )
+                print(f"[INFO] Saved checkpoint: {last_path}")
+
+        return
+
+    raise ValueError(f"Unsupported model type: {model_type}. Expected 'unet' or 'gan'.")
+
+
+if __name__ == "__main__":
+    main()

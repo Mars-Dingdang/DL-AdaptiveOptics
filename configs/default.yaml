@@ -1,0 +1,71 @@
+seed: 42
+
+experiment:
+  name: turbulence_restoration
+  output_dir: outputs
+
+runtime:
+  device: auto  # auto | cuda | cpu
+  amp: false
+
+data:
+  train_root: data/raw/UCMerced_LandUse/Images
+  val_root: ""  # optional; if empty, split from train_root by val_ratio
+  val_ratio: 0.1
+  image_size: 256
+  random_crop: true
+  horizontal_flip_prob: 0.5
+  batch_size: 8
+  val_batch_size: 8
+  num_workers: 4
+  pin_memory: true
+
+degradation:
+  zernike_order: 6
+  phase_strength: 1.5
+  psf_kernel_size: 31
+  gaussian_sigma_range: [0.3, 1.2]
+  motion_blur_prob: 0.25
+  motion_blur_kernel_range: [7, 17]
+  poisson_scale_range: [40.0, 120.0]
+  gaussian_noise_std_range: [0.003, 0.02]
+  jpeg_quality_range: [70, 98]
+
+model:
+  type: unet  # unet | gan
+  in_channels: 3
+  out_channels: 3
+  base_channels: 64
+
+loss:
+  l1_weight: 1.0
+  gan:
+    lambda_l1: 100.0
+    lambda_physics: 10.0
+
+optimizer:
+  learning_rate: 0.0002
+  beta1: 0.5
+  beta2: 0.999
+  weight_decay: 0.0
+
+scheduler:
+  enabled: true
+  step_size: 30
+  gamma: 0.5
+
+train:
+  epochs: 50
+  log_interval: 20
+  val_interval: 1
+  save_interval: 5
+  max_grad_norm: 0.0
+
+metrics:
+  compute_lpips: true
+  lpips_net: alex
+
+checkpoint:
+  dir: checkpoints
+  save_best_only: false
+  monitor: psnr
