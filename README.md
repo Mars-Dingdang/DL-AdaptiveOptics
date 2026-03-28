@@ -33,7 +33,7 @@
 > git checkout main
 > git pull origin main
 > git branch -d fix_branch_username # delete local branch
-> # On github, delete the branch fix_branch_username after merge to keep repo clean
+> # On GitHub, delete the branch fix_branch_username after merge to keep repo clean
 > ```
 
 > [!IMPORTANT] Stay Up-to-Date
