@@ -11,7 +11,6 @@ Usage:
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import asdict
 from pathlib import Path
 import argparse
 import copy
@@ -21,6 +20,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader, Dataset, Subset
@@ -111,6 +111,41 @@ def build_turbulence_params(cfg: dict[str, Any]) -> TurbulenceParams:
     )
 
 
+def _resolve_path(value: str | Path) -> Path:
+    """Normalize a path string for robust equality checks."""
+    return Path(value).expanduser().resolve()
+
+
+def validate_data_protocol(cfg: dict[str, Any]) -> None:
+    """Validate and warn about train/val/test split configuration."""
+    data_cfg = cfg.get("data", {})
+    train_root_str = str(data_cfg.get("train_root", "")).strip()
+    val_root_str = str(data_cfg.get("val_root", "")).strip()
+    test_root_str = str(data_cfg.get("test_root", "")).strip()
+
+    if not train_root_str:
+        raise RuntimeError("data.train_root must be set.")
+
+    train_root = _resolve_path(train_root_str)
+    val_root = _resolve_path(val_root_str) if val_root_str else None
+    test_root = _resolve_path(test_root_str) if test_root_str else None
+
+    if val_root is not None and val_root == train_root:
+        print("[WARN] data.val_root points to the same location as data.train_root.")
+        print("[WARN] This can cause validation leakage during model selection.")
+
+    if test_root is not None and test_root == train_root:
+        print("[WARN] data.test_root points to the same location as data.train_root.")
+        print("[WARN] Final test metrics will be biased if test data is seen in training.")
+
+    if test_root is not None and val_root is not None and test_root == val_root:
+        print("[WARN] data.test_root points to the same location as data.val_root.")
+        print("[WARN] Keep validation for tuning and reserve test for final one-time reporting.")
+
+    if test_root is None:
+        print("[WARN] data.test_root is empty. Configure a held-out test set for final reporting.")
+
+
 def build_datasets(cfg: dict[str, Any], seed: int) -> tuple[Dataset[Any], Dataset[Any]]:
     """Create train/val datasets from config.
 
@@ -184,31 +219,47 @@ def build_dataloaders(cfg: dict[str, Any], seed: int) -> tuple[DataLoader[Any], 
     """Build train and validation dataloaders."""
     data_cfg = cfg["data"]
     train_ds, val_ds = build_datasets(cfg=cfg, seed=seed)
+    num_workers = int(data_cfg["num_workers"])
+    pin_memory = bool(data_cfg["pin_memory"])
+
+    loader_extra_kwargs: dict[str, Any] = {}
+    if num_workers > 0:
+        loader_extra_kwargs["persistent_workers"] = bool(data_cfg.get("persistent_workers", True))
+        loader_extra_kwargs["prefetch_factor"] = max(1, int(data_cfg.get("prefetch_factor", 2)))
 
     train_loader = DataLoader(
         train_ds,
         batch_size=int(data_cfg["batch_size"]),
         shuffle=True,
-        num_workers=int(data_cfg["num_workers"]),
-        pin_memory=bool(data_cfg["pin_memory"]),
+        num_workers=num_workers,
+        pin_memory=pin_memory,
         drop_last=True,
+        **loader_extra_kwargs,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=int(data_cfg.get("val_batch_size", data_cfg["batch_size"])),
         shuffle=False,
-        num_workers=int(data_cfg["num_workers"]),
-        pin_memory=bool(data_cfg["pin_memory"]),
+        num_workers=num_workers,
+        pin_memory=pin_memory,
         drop_last=False,
+        **loader_extra_kwargs,
     )
     return train_loader, val_loader
 
 
-def _mean_stats(sum_stats: dict[str, float], count: int) -> dict[str, float]:
+def _mean_stats(sum_stats: dict[str, float], count: int | dict[str, int]) -> dict[str, float]:
     """Convert sum stats to mean stats."""
-    if count <= 0:
-        return {k: 0.0 for k in sum_stats}
-    return {k: v / float(count) for k, v in sum_stats.items()}
+    if isinstance(count, int):
+        if count <= 0:
+            return {k: 0.0 for k in sum_stats}
+        return {k: v / float(count) for k, v in sum_stats.items()}
+
+    out: dict[str, float] = {}
+    for k, v in sum_stats.items():
+        denom = int(count.get(k, 0))
+        out[k] = (v / float(denom)) if denom > 0 else 0.0
+    return out
 
 
 def train_one_epoch_unet(
@@ -221,47 +272,66 @@ def train_one_epoch_unet(
     epoch: int,
     log_interval: int,
     max_grad_norm: float,
+    amp_enabled: bool,
+    scaler: GradScaler | None,
+    metric_interval: int,
 ) -> dict[str, float]:
     """Train U-Net for one epoch."""
     model.train()
+    use_amp = amp_enabled and device.type == "cuda"
 
     sum_stats: dict[str, float] = defaultdict(float)
-    n_batches = 0
+    sum_counts: dict[str, int] = defaultdict(int)
 
     for step, batch in enumerate(loader, start=1):
         degraded, clear = batch
         degraded = degraded.to(device, non_blocking=True)
         clear = clear.to(device, non_blocking=True)
 
-        pred = model(degraded)
-        pred_01 = pred.clamp(0.0, 1.0)
+        should_log = log_interval > 0 and (step % log_interval == 0 or step == len(loader))
+        compute_metrics_now = should_log or (metric_interval > 0 and step % metric_interval == 0)
 
-        loss = criterion(pred_01, clear)
+        with autocast(enabled=use_amp):
+            pred = model(degraded)
+            pred_01 = pred.clamp(0.0, 1.0)
+
+            loss = criterion(pred_01, clear)
 
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        if max_grad_norm > 0.0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
-        optimizer.step()
+        if use_amp and scaler is not None:
+            scaler.scale(loss).backward()
+            if max_grad_norm > 0.0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if max_grad_norm > 0.0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
+            optimizer.step()
 
-        batch_metrics = metrics.compute_batch(pred=pred_01.detach(), target=clear.detach())
+        batch_metrics: dict[str, float] | None = None
+        if compute_metrics_now:
+            batch_metrics = metrics.compute_batch(pred=pred_01.detach(), target=clear.detach())
 
         sum_stats["loss"] += float(loss.detach().item())
-        for k, v in batch_metrics.items():
-            sum_stats[k] += float(v)
-        n_batches += 1
+        sum_counts["loss"] += 1
+        if batch_metrics is not None:
+            for k, v in batch_metrics.items():
+                sum_stats[k] += float(v)
+                sum_counts[k] += 1
 
-        if log_interval > 0 and (step % log_interval == 0 or step == len(loader)):
-            log_msg = (
-                f"[Train][UNet] epoch={epoch} step={step}/{len(loader)} "
-                f"loss={loss.detach().item():.4f} psnr={batch_metrics['psnr']:.3f} "
-                f"ssim={batch_metrics['ssim']:.4f}"
-            )
-            if "lpips" in batch_metrics:
-                log_msg += f" lpips={batch_metrics['lpips']:.4f}"
+        if should_log:
+            log_msg = f"[Train][UNet] epoch={epoch} step={step}/{len(loader)} loss={loss.detach().item():.4f}"
+            if batch_metrics is not None:
+                if "psnr" in batch_metrics and "ssim" in batch_metrics:
+                    log_msg += f" psnr={batch_metrics['psnr']:.3f} ssim={batch_metrics['ssim']:.4f}"
+                if "lpips" in batch_metrics:
+                    log_msg += f" lpips={batch_metrics['lpips']:.4f}"
             print(log_msg)
 
-    return _mean_stats(sum_stats, n_batches)
+    return _mean_stats(sum_stats, sum_counts)
 
 
 @torch.no_grad()
@@ -309,13 +379,17 @@ def train_one_epoch_gan(
     epoch: int,
     log_interval: int,
     max_grad_norm: float,
+    amp_enabled: bool,
+    scaler: GradScaler | None,
+    metric_interval: int,
 ) -> dict[str, float]:
     """Train conditional GAN for one epoch."""
     generator.train()
     discriminator.train()
+    use_amp = amp_enabled and device.type == "cuda"
 
     sum_stats: dict[str, float] = defaultdict(float)
-    n_batches = 0
+    sum_counts: dict[str, int] = defaultdict(int)
 
     for step, batch in enumerate(loader, start=1):
         degraded, clear = batch
@@ -325,66 +399,96 @@ def train_one_epoch_gan(
         degraded_n = to_minus1_1(degraded)
         clear_n = to_minus1_1(clear)
 
-        # Update discriminator.
-        with torch.no_grad():
-            fake_clear_detached = generator(degraded_n)
+        should_log = log_interval > 0 and (step % log_interval == 0 or step == len(loader))
+        compute_metrics_now = should_log or (metric_interval > 0 and step % metric_interval == 0)
 
-        pred_real = discriminator(degraded_n, clear_n)
-        pred_fake = discriminator(degraded_n, fake_clear_detached)
-        loss_d = discriminator_loss(pred_real_logits=pred_real, pred_fake_logits=pred_fake)
+        # Update discriminator.
+        with autocast(enabled=use_amp):
+            with torch.no_grad():
+                fake_clear_detached = generator(degraded_n)
+
+            pred_real = discriminator(degraded_n, clear_n)
+            pred_fake = discriminator(degraded_n, fake_clear_detached)
+            loss_d = discriminator_loss(pred_real_logits=pred_real, pred_fake_logits=pred_fake)
 
         optimizer_d.zero_grad(set_to_none=True)
-        loss_d.backward()
-        if max_grad_norm > 0.0:
-            torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=max_grad_norm)
-        optimizer_d.step()
+        if use_amp and scaler is not None:
+            scaler.scale(loss_d).backward()
+            if max_grad_norm > 0.0:
+                scaler.unscale_(optimizer_d)
+                torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=max_grad_norm)
+            scaler.step(optimizer_d)
+        else:
+            loss_d.backward()
+            if max_grad_norm > 0.0:
+                torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=max_grad_norm)
+            optimizer_d.step()
 
         # Update generator.
-        fake_clear = generator(degraded_n)
-        pred_fake_for_g = discriminator(degraded_n, fake_clear)
+        with autocast(enabled=use_amp):
+            fake_clear = generator(degraded_n)
+            pred_fake_for_g = discriminator(degraded_n, fake_clear)
 
-        loss_g_total, g_stats = generator_total_loss(
-            fake_clear=fake_clear,
-            real_clear=clear_n,
-            degraded_input=degraded_n,
-            pred_fake_logits=pred_fake_for_g,
-            weights=gan_weights,
-        )
+            loss_g_total, g_stats = generator_total_loss(
+                fake_clear=fake_clear,
+                real_clear=clear_n,
+                degraded_input=degraded_n,
+                pred_fake_logits=pred_fake_for_g,
+                weights=gan_weights,
+            )
 
-        # Keep explicit L1 contribution configurable while retaining GAN module internals.
-        if abs(l1_weight - gan_weights.lambda_l1) > 1e-8:
-            diff = l1_weight - gan_weights.lambda_l1
-            loss_g_total = loss_g_total + diff * torch.nn.functional.l1_loss(fake_clear, clear_n)
+            # Keep explicit L1 contribution configurable while retaining GAN module internals.
+            if abs(l1_weight - gan_weights.lambda_l1) > 1e-8:
+                diff = l1_weight - gan_weights.lambda_l1
+                loss_g_total = loss_g_total + diff * torch.nn.functional.l1_loss(fake_clear, clear_n)
 
         optimizer_g.zero_grad(set_to_none=True)
-        loss_g_total.backward()
-        if max_grad_norm > 0.0:
-            torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
-        optimizer_g.step()
+        if use_amp and scaler is not None:
+            scaler.scale(loss_g_total).backward()
+            if max_grad_norm > 0.0:
+                scaler.unscale_(optimizer_g)
+                torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
+            scaler.step(optimizer_g)
+            scaler.update()
+        else:
+            loss_g_total.backward()
+            if max_grad_norm > 0.0:
+                torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=max_grad_norm)
+            optimizer_g.step()
 
-        fake_01 = to_0_1(fake_clear.detach())
-        batch_metrics = metrics.compute_batch(pred=fake_01, target=clear.detach())
+        batch_metrics: dict[str, float] | None = None
+        if compute_metrics_now:
+            fake_01 = to_0_1(fake_clear.detach())
+            batch_metrics = metrics.compute_batch(pred=fake_01, target=clear.detach())
 
         sum_stats["d_loss"] += float(loss_d.detach().item())
+        sum_counts["d_loss"] += 1
         sum_stats["g_total"] += float(loss_g_total.detach().item())
+        sum_counts["g_total"] += 1
         sum_stats["g_adv"] += float(g_stats["g_adv"])
+        sum_counts["g_adv"] += 1
         sum_stats["g_l1"] += float(g_stats["g_l1"])
+        sum_counts["g_l1"] += 1
         sum_stats["g_phy"] += float(g_stats["g_phy"])
-        for k, v in batch_metrics.items():
-            sum_stats[k] += float(v)
-        n_batches += 1
+        sum_counts["g_phy"] += 1
+        if batch_metrics is not None:
+            for k, v in batch_metrics.items():
+                sum_stats[k] += float(v)
+                sum_counts[k] += 1
 
-        if log_interval > 0 and (step % log_interval == 0 or step == len(loader)):
+        if should_log:
             log_msg = (
                 f"[Train][GAN] epoch={epoch} step={step}/{len(loader)} "
-                f"d={loss_d.detach().item():.4f} g={loss_g_total.detach().item():.4f} "
-                f"psnr={batch_metrics['psnr']:.3f} ssim={batch_metrics['ssim']:.4f}"
+                f"d={loss_d.detach().item():.4f} g={loss_g_total.detach().item():.4f}"
             )
-            if "lpips" in batch_metrics:
-                log_msg += f" lpips={batch_metrics['lpips']:.4f}"
+            if batch_metrics is not None:
+                if "psnr" in batch_metrics and "ssim" in batch_metrics:
+                    log_msg += f" psnr={batch_metrics['psnr']:.3f} ssim={batch_metrics['ssim']:.4f}"
+                if "lpips" in batch_metrics:
+                    log_msg += f" lpips={batch_metrics['lpips']:.4f}"
             print(log_msg)
 
-    return _mean_stats(sum_stats, n_batches)
+    return _mean_stats(sum_stats, sum_counts)
 
 
 @torch.no_grad()
@@ -448,12 +552,19 @@ def main() -> None:
     """Main training entrypoint."""
     args = parse_args()
     cfg = load_config(args.config)
+    validate_data_protocol(cfg)
 
     seed = int(cfg.get("seed", 42))
     set_seed(seed)
 
-    device = resolve_device(str(cfg["runtime"].get("device", "auto")))
+    runtime_cfg = cfg.get("runtime", {})
+    device = resolve_device(str(runtime_cfg.get("device", "auto")))
+    amp_requested = bool(runtime_cfg.get("amp", False))
+    amp_enabled = amp_requested and device.type == "cuda"
+    if amp_requested and not amp_enabled:
+        print("[WARN] AMP requested but CUDA is unavailable. AMP is disabled.")
     print(f"[INFO] Using device: {device}")
+    print(f"[INFO] AMP enabled: {amp_enabled}")
 
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
@@ -484,6 +595,7 @@ def main() -> None:
     val_interval = int(train_cfg.get("val_interval", 1))
     save_interval = int(train_cfg.get("save_interval", 5))
     max_grad_norm = float(train_cfg.get("max_grad_norm", 0.0))
+    train_metric_interval = max(0, int(train_cfg.get("train_metric_interval", 0)))
 
     ckpt_cfg = cfg["checkpoint"]
     ckpt_dir = Path(ckpt_cfg.get("dir", "checkpoints"))
@@ -505,6 +617,7 @@ def main() -> None:
 
         criterion = nn.L1Loss()
         optimizer = Adam(model.parameters(), lr=lr, betas=betas, weight_decay=weight_decay)
+        scaler = GradScaler(enabled=amp_enabled)
         scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma) if use_scheduler else None
 
         for epoch in range(1, epochs + 1):
@@ -518,6 +631,9 @@ def main() -> None:
                 epoch=epoch,
                 log_interval=log_interval,
                 max_grad_norm=max_grad_norm,
+                amp_enabled=amp_enabled,
+                scaler=scaler,
+                metric_interval=train_metric_interval,
             )
 
             if scheduler is not None:
@@ -584,6 +700,7 @@ def main() -> None:
 
         optimizer_g = Adam(generator.parameters(), lr=lr, betas=betas, weight_decay=weight_decay)
         optimizer_d = Adam(discriminator.parameters(), lr=lr, betas=betas, weight_decay=weight_decay)
+        scaler = GradScaler(enabled=amp_enabled)
 
         scheduler_g = StepLR(optimizer_g, step_size=step_size, gamma=gamma) if use_scheduler else None
         scheduler_d = StepLR(optimizer_d, step_size=step_size, gamma=gamma) if use_scheduler else None
@@ -610,6 +727,9 @@ def main() -> None:
                 epoch=epoch,
                 log_interval=log_interval,
                 max_grad_norm=max_grad_norm,
+                amp_enabled=amp_enabled,
+                scaler=scaler,
+                metric_interval=train_metric_interval,
             )
 
             if scheduler_g is not None:
