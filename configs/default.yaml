@@ -5,7 +5,7 @@ experiment:
   output_dir: outputs
 
 runtime:
-  device: auto  # auto | cuda | cpu
+  device: auto  # auto | cuda | cpu | mps
   amp: false
 
 data:
