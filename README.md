@@ -19,7 +19,7 @@
 > **Please follow this workflow since main branch is protected**:
 > ```bash
 > git clone https://github.com/Mars-Dingdang/DL-AdaptiveOptics.git
-> cd Project
+> cd DL-AdaptiveOptics
 > git checkout main
 > git pull origin main
 > git checkout -b fix_branch_username # each time you start a new feature/experiment
