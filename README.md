@@ -14,24 +14,54 @@
 
 并提供了轻量条件扩散模型骨架，便于后续加分实验。
 
-**GitHub Repo**: .
+> [!IMPORTANT] Workflow
+> **GitHub Repo**: https://github.com/Mars-Dingdang/DL-AdaptiveOptics.git
+> **Please follow this workflow since main branch is protected**:
+> ```bash
+> git clone https://github.com/Mars-Dingdang/DL-AdaptiveOptics.git
+> cd DL-AdaptiveOptics
+> git checkout main
+> git pull origin main
+> git checkout -b fix_branch_username # each time you start a new feature/experiment
+>
+> git add .
+> git commit -m "Your commit message"
+> git push origin fix_branch_username
+> # on GitHub, create a PR from fix_branch_username to main, request review and merge after approval
+> 
+> # After PR is merged, switch back to main and pull latest
+> git checkout main
+> git pull origin main
+> git branch -d fix_branch_username # delete local branch
+> # On GitHub, delete the branch fix_branch_username after merge to keep repo clean
+> ```
 
-**Please follow this workflow since main branch is protected**:
-```bash
-git clone <repo_url>
-cd Project
-
-git checkout main
-git pull origin main
-git checkout -b your_branch_name # each time you start a new feature/experiment
-
-git add .
-git commit -m "Your commit message"
-git push origin your_branch_name
-# After PR is merged, switch back to main and pull latest
-git checkout main
-git pull origin main
-```
+> [!IMPORTANT] Stay Up-to-Date
+> 如果你在修改自己的功能分支时遇到 main 分支有更新，最稳妥的做法如下：
+> ```bash
+> # in your feature branch
+> git add .
+> git commit -m "WIP: your message" # must finish commit before switching
+> git checkout main
+> git pull origin main
+> git checkout fix_branch_username
+> git merge main # resolve any conflicts if needed, then commit
+> ```
+> 如果你不想 commit，也不想处理冲突，可以选择暂存修改，切换并拉取 main 后再恢复修改：
+> ```bash
+> git stash
+> git checkout main
+> git pull origin main
+> git checkout fix_branch_username
+> git stash pop # apply stashed changes, resolve conflicts if any
+> ```
+> 如果你的代码一团糟，或者你不想处理冲突，也可以选择放弃本地修改，直接切换并拉取 main：
+> ```bash
+> git checkout main
+> git pull origin main
+> git checkout fix_branch_username
+> git reset --hard main # WARNING: this will discard all local changes in fix_branch_username
+> ```
 
 ---
 
