@@ -34,6 +34,7 @@ from modules.gan_models import (
     discriminator_loss,
     generator_total_loss,
 )
+from modules.diffusion import ConditionalDiffusionModel, DiffusionConfig
 from utils.degradation import TurbulenceParams
 from utils.metrics import RestorationMetrics
 
@@ -542,6 +543,123 @@ def evaluate_gan(
     return _mean_stats(sum_stats, n_batches)
 
 
+def train_one_epoch_diffusion(
+    model: ConditionalDiffusionModel,
+    loader: DataLoader[Any],
+    optimizer: torch.optim.Optimizer,
+    noise_weight: float,
+    metrics: RestorationMetrics,
+    device: torch.device,
+    epoch: int,
+    log_interval: int,
+    max_grad_norm: float,
+    amp_enabled: bool,
+    scaler: GradScaler | None,
+    metric_interval: int,
+    ddim_steps: int,
+) -> dict[str, float]:
+    """Train diffusion model for one epoch."""
+    model.train()
+    use_amp = amp_enabled and device.type == "cuda"
+
+    sum_stats: dict[str, float] = defaultdict(float)
+    sum_counts: dict[str, int] = defaultdict(int)
+
+    for step, batch in enumerate(loader, start=1):
+        degraded, clear = batch
+        degraded = degraded.to(device, non_blocking=True)
+        clear = clear.to(device, non_blocking=True)
+
+        # Convert to [-1, 1] range for diffusion model
+        degraded_n = to_minus1_1(degraded)
+        clear_n = to_minus1_1(clear)
+
+        should_log = log_interval > 0 and (step % log_interval == 0 or step == len(loader))
+        compute_metrics_now = should_log or (metric_interval > 0 and step % metric_interval == 0)
+
+        # Sample random timesteps
+        batch_size = clear.shape[0]
+        t = torch.randint(0, model.config.timesteps, (batch_size,), device=device)
+
+        with autocast(enabled=use_amp):
+            # Compute noise prediction loss
+            loss = model.p_losses(x_start=clear_n, cond=degraded_n, t=t)
+            loss = loss * noise_weight
+
+        optimizer.zero_grad(set_to_none=True)
+        if use_amp and scaler is not None:
+            scaler.scale(loss).backward()
+            if max_grad_norm > 0.0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if max_grad_norm > 0.0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
+            optimizer.step()
+
+        batch_metrics: dict[str, float] | None = None
+        if compute_metrics_now:
+            # Generate sample for metrics (expensive, so only when logging)
+            with torch.no_grad():
+                model.eval()
+                pred_n = model.sample_ddim(cond=degraded_n, steps=ddim_steps)
+                model.train()
+                pred_01 = to_0_1(pred_n)
+                batch_metrics = metrics.compute_batch(pred=pred_01, target=clear)
+
+        sum_stats["loss"] += float(loss.detach().item())
+        sum_counts["loss"] += 1
+        if batch_metrics is not None:
+            for k, v in batch_metrics.items():
+                sum_stats[k] += float(v)
+                sum_counts[k] += 1
+
+        if should_log:
+            log_msg = f"[Train][Diffusion] epoch={epoch} step={step}/{len(loader)} loss={loss.detach().item():.4f}"
+            if batch_metrics is not None:
+                if "psnr" in batch_metrics and "ssim" in batch_metrics:
+                    log_msg += f" psnr={batch_metrics['psnr']:.3f} ssim={batch_metrics['ssim']:.4f}"
+                if "lpips" in batch_metrics:
+                    log_msg += f" lpips={batch_metrics['lpips']:.4f}"
+            print(log_msg)
+
+    return _mean_stats(sum_stats, sum_counts)
+
+
+@torch.no_grad()
+def evaluate_diffusion(
+    model: ConditionalDiffusionModel,
+    loader: DataLoader[Any],
+    metrics: RestorationMetrics,
+    device: torch.device,
+    ddim_steps: int,
+) -> dict[str, float]:
+    """Evaluate diffusion model."""
+    model.eval()
+
+    sum_stats: dict[str, float] = defaultdict(float)
+    n_batches = 0
+
+    for degraded, clear in loader:
+        degraded = degraded.to(device, non_blocking=True)
+        clear = clear.to(device, non_blocking=True)
+
+        degraded_n = to_minus1_1(degraded)
+        pred_n = model.sample_ddim(cond=degraded_n, steps=ddim_steps)
+        pred_01 = to_0_1(pred_n)
+
+        batch_metrics = metrics.compute_batch(pred=pred_01, target=clear)
+
+        for k, v in batch_metrics.items():
+            sum_stats[k] += float(v)
+        n_batches += 1
+
+    return _mean_stats(sum_stats, n_batches)
+
+
 def save_checkpoint(state: dict[str, Any], path: Path) -> None:
     """Save checkpoint dictionary."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -794,7 +912,102 @@ def main() -> None:
 
         return
 
-    raise ValueError(f"Unsupported model type: {model_type}. Expected 'unet' or 'gan'.")
+    if model_type == "diffusion":
+        # Build diffusion configuration
+        diffusion_cfg = model_cfg.get("diffusion", {})
+        diff_config = DiffusionConfig(
+            image_channels=int(model_cfg.get("in_channels", 3)),
+            cond_channels=int(model_cfg.get("in_channels", 3)),
+            base_channels=int(model_cfg.get("base_channels", 64)),
+            timesteps=int(diffusion_cfg.get("timesteps", 1000)),
+            beta_start=float(diffusion_cfg.get("beta_start", 1e-4)),
+            beta_end=float(diffusion_cfg.get("beta_end", 2e-2)),
+        )
+
+        model = ConditionalDiffusionModel(config=diff_config).to(device)
+
+        optimizer = Adam(model.parameters(), lr=lr, betas=betas, weight_decay=weight_decay)
+        scaler = GradScaler(enabled=amp_enabled)
+        scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma) if use_scheduler else None
+
+        loss_cfg = cfg["loss"]
+        diffusion_loss_cfg = loss_cfg.get("diffusion", {})
+        noise_weight = float(diffusion_loss_cfg.get("noise_weight", 1.0))
+
+        # Get DDIM sampling steps for validation
+        ddim_steps = int(diffusion_cfg.get("ddim_steps", 50))
+
+        for epoch in range(1, epochs + 1):
+            train_stats = train_one_epoch_diffusion(
+                model=model,
+                loader=train_loader,
+                optimizer=optimizer,
+                noise_weight=noise_weight,
+                metrics=metric_computer,
+                device=device,
+                epoch=epoch,
+                log_interval=log_interval,
+                max_grad_norm=max_grad_norm,
+                amp_enabled=amp_enabled,
+                scaler=scaler,
+                metric_interval=train_metric_interval,
+                ddim_steps=ddim_steps,
+            )
+
+            if scheduler is not None:
+                scheduler.step()
+
+            print(f"[Epoch {epoch}] train={train_stats}")
+
+            do_val = (val_interval > 0) and (epoch % val_interval == 0)
+            val_stats: dict[str, float] | None = None
+            if do_val:
+                val_stats = evaluate_diffusion(
+                    model=model,
+                    loader=val_loader,
+                    metrics=metric_computer,
+                    device=device,
+                    ddim_steps=ddim_steps,
+                )
+                print(f"[Epoch {epoch}] val={val_stats}")
+
+                metric_value = float(val_stats.get(monitor_name, -1e9))
+                if metric_value > best_value:
+                    best_value = metric_value
+                    best_path = ckpt_dir / "best_diffusion.pt"
+                    save_checkpoint(
+                        {
+                            "epoch": epoch,
+                            "model_type": model_type,
+                            "config": copy.deepcopy(cfg),
+                            "model_state": model.state_dict(),
+                            "optimizer_state": optimizer.state_dict(),
+                            "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
+                            "val_stats": val_stats,
+                        },
+                        best_path,
+                    )
+                    print(f"[INFO] Saved new best checkpoint: {best_path} ({monitor_name}={metric_value:.4f})")
+
+            if save_interval > 0 and (epoch % save_interval == 0 or epoch == epochs):
+                last_path = ckpt_dir / f"diffusion_epoch_{epoch}.pt"
+                save_checkpoint(
+                    {
+                        "epoch": epoch,
+                        "model_type": model_type,
+                        "config": copy.deepcopy(cfg),
+                        "model_state": model.state_dict(),
+                        "optimizer_state": optimizer.state_dict(),
+                        "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
+                        "train_stats": train_stats,
+                    },
+                    last_path,
+                )
+                print(f"[INFO] Saved checkpoint: {last_path}")
+
+        return
+
+    raise ValueError(f"Unsupported model type: {model_type}. Expected 'unet', 'gan', or 'diffusion'.")
 
 
 if __name__ == "__main__":

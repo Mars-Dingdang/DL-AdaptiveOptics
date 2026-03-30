@@ -35,16 +35,25 @@ degradation:
   jpeg_quality_range: [70, 98]
 
 model:
-  type: unet  # unet | gan
+  type: unet  # unet | gan | diffusion
   in_channels: 3
   out_channels: 3
   base_channels: 64
+  # diffusion-specific params (only used when type=diffusion)
+  diffusion:
+    timesteps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+    ddim_steps: 50  # number of steps for DDIM sampling during inference
+    ddim_eta: 0.0   # stochasticity parameter: 0.0 for deterministic
 
 loss:
   l1_weight: 1.0
   gan:
     lambda_l1: 100.0
     lambda_physics: 10.0
+  diffusion:
+    noise_weight: 1.0  # weight for noise prediction MSE loss
 
 optimizer:
   learning_rate: 0.0002
