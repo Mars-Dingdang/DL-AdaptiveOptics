@@ -160,7 +160,13 @@
   - L1 重建损失
   - 退化一致性损失（将生成图做前向退化后，应逼近输入退化图）
 
-3) 评估指标
+3) Diffusion 训练目标
+
+- 噪声预测损失：预测每个时间步添加的噪声（MSE）
+- 采样方法：DDIM 确定性采样
+- 支持自定义时间步数和随机性参数
+
+4) 评估指标
 
 - PSNR
 - SSIM
@@ -409,6 +415,23 @@ python train.py --config configs/train_gan.yaml
 - checkpoints/best_gan.pt
 - checkpoints/gan_epoch_*.pt
 
+### 4.8.1 训练 Diffusion（加分实验）
+
+复制配置并把模型类型改成 diffusion：
+
+```powershell
+Copy-Item configs/default.yaml configs/train_diffusion.yaml
+(Get-Content configs/train_diffusion.yaml) -replace 'type: unet', 'type: diffusion' | Set-Content configs/train_diffusion.yaml
+python train.py --config configs/train_diffusion.yaml
+```
+
+训练输出：
+
+- checkpoints/best_diffusion.pt
+- checkpoints/diffusion_epoch_*.pt
+
+注意：Diffusion 模型训练较慢，因为每次验证都需要运行 DDIM 采样。建议适当降低 val_interval 或使用较小的验证集。
+
 ### 4.9 离线评估
 
 评估 U-Net：
@@ -421,6 +444,12 @@ python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.
 
 ```powershell
 python eval.py --config configs/default.yaml --checkpoint checkpoints/best_gan.pt --model-type gan --split val --save-images --out-dir outputs/eval_gan
+```
+
+评估 Diffusion：
+
+```powershell
+python eval.py --config configs/default.yaml --checkpoint checkpoints/best_diffusion.pt --model-type diffusion --split val --save-images --out-dir outputs/eval_diffusion
 ```
 
 最终测试集评估（仅在模型定版后运行）：
@@ -456,6 +485,12 @@ python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_u
 
 ```powershell
 python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_gan.pt --model-type gan --host 127.0.0.1 --port 7860
+```
+
+启动 Diffusion Demo：
+
+```powershell
+python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_diffusion.pt --model-type diffusion --host 127.0.0.1 --port 7860
 ```
 
 浏览器打开：
@@ -599,6 +634,22 @@ python train.py --config configs/train_gan.yaml
 sed -i '' 's/type: unet/type: gan/' configs/train_gan.yaml
 ```
 
+### 8.8.1 训练 Diffusion（加分实验）
+
+```bash
+cp configs/default.yaml configs/train_diffusion.yaml
+sed -i 's/type: unet/type: diffusion/' configs/train_diffusion.yaml
+python train.py --config configs/train_diffusion.yaml
+```
+
+如果你的系统是 macOS（BSD sed），请用：
+
+```bash
+sed -i '' 's/type: unet/type: diffusion/' configs/train_diffusion.yaml
+```
+
+注意：Diffusion 模型训练较慢，因为每次验证都需要运行 DDIM 采样。建议适当降低 val_interval 或使用较小的验证集。
+
 ### 8.9 离线评估
 
 评估 U-Net：
@@ -613,6 +664,12 @@ python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.
 python eval.py --config configs/default.yaml --checkpoint checkpoints/best_gan.pt --model-type gan --split val --save-images --out-dir outputs/eval_gan
 ```
 
+评估 Diffusion：
+
+```bash
+python eval.py --config configs/default.yaml --checkpoint checkpoints/best_diffusion.pt --model-type diffusion --split val --save-images --out-dir outputs/eval_diffusion
+```
+
 最终测试集评估（模型定版后仅运行一次）：
 
 ```bash
@@ -623,6 +680,18 @@ python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.
 
 ```bash
 python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --model-type unet --host 0.0.0.0 --port 7860
+```
+
+启动 GAN Demo：
+
+```bash
+python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_gan.pt --model-type gan --host 0.0.0.0 --port 7860
+```
+
+启动 Diffusion Demo：
+
+```bash
+python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_diffusion.pt --model-type diffusion --host 0.0.0.0 --port 7860
 ```
 
 如果需要公网访问：
