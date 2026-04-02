@@ -80,5 +80,5 @@ metrics:
 
 checkpoint:
   dir: checkpoints
-  save_best_only: false
+  save_best_only: true
   monitor: psnr
