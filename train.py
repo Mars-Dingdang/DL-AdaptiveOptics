@@ -406,7 +406,6 @@ def train_one_epoch_gan(
     loader: DataLoader[Any],
     optimizer_g: torch.optim.Optimizer,
     optimizer_d: torch.optim.Optimizer,
-    l1_weight: float,
     gan_weights: GANLossWeights,
     metrics: RestorationMetrics,
     device: torch.device,
@@ -481,11 +480,6 @@ def train_one_epoch_gan(
                 pred_fake_logits=pred_fake_for_g,
                 weights=gan_weights,
             )
-
-            # Keep explicit L1 contribution configurable while retaining GAN module internals.
-            if abs(l1_weight - gan_weights.lambda_l1) > 1e-8:
-                diff = l1_weight - gan_weights.lambda_l1
-                loss_g_total = loss_g_total + diff * torch.nn.functional.l1_loss(fake_clear, clear_n)
 
         optimizer_g.zero_grad(set_to_none=True)
         if use_amp and scaler is not None:
@@ -917,10 +911,16 @@ def main() -> None:
         scheduler_d = StepLR(optimizer_d, step_size=step_size, gamma=gamma) if use_scheduler else None
 
         loss_cfg = cfg["loss"]
-        l1_weight = float(loss_cfg.get("l1_weight", 100.0))
         gan_cfg = loss_cfg.get("gan", {})
+        gan_l1 = float(gan_cfg.get("lambda_l1", 100.0))
+        legacy_l1 = loss_cfg.get("l1_weight", None)
+        if legacy_l1 is not None and abs(float(legacy_l1) - gan_l1) > 1e-8:
+            print(
+                "[WARN] loss.l1_weight is deprecated for GAN and ignored. "
+                "Using loss.gan.lambda_l1 as the only GAN L1 weight."
+            )
         gan_weights = GANLossWeights(
-            lambda_l1=float(gan_cfg.get("lambda_l1", l1_weight)),
+            lambda_l1=gan_l1,
             lambda_physics=float(gan_cfg.get("lambda_physics", 10.0)),
         )
 
@@ -931,7 +931,6 @@ def main() -> None:
                 loader=train_loader,
                 optimizer_g=optimizer_g,
                 optimizer_d=optimizer_d,
-                l1_weight=l1_weight,
                 gan_weights=gan_weights,
                 metrics=metric_computer,
                 device=device,

@@ -48,7 +48,7 @@ model:
     ddim_eta: 0.0   # stochasticity parameter: 0.0 for deterministic
 
 loss:
-  l1_weight: 1.0
+  l1_weight: 100.0  # legacy field (GAN now uses loss.gan.lambda_l1)
   gan:
     lambda_l1: 100.0
     lambda_physics: 10.0

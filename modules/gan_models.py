@@ -43,12 +43,16 @@ class DownsampleBlock(nn.Module):
 
 
 class UpsampleBlock(nn.Module):
-    """Upsampling ConvTranspose block for generator."""
+    """Upsampling block for generator.
+
+    Uses resize-convolution to reduce checkerboard artifacts.
+    """
 
     def __init__(self, in_channels: int, out_channels: int, dropout: float = 0.0) -> None:
         super().__init__()
         layers: list[nn.Module] = [
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
         ]
@@ -86,8 +90,11 @@ class Pix2PixGenerator(nn.Module):
         self.up2 = UpsampleBlock(c3 + c3, c2, dropout=0.0)
         self.up3 = UpsampleBlock(c2 + c2, c1, dropout=0.0)
 
-        self.out = nn.ConvTranspose2d(c1 + c1, out_channels, kernel_size=4, stride=2, padding=1)
-        self.out_act = nn.Tanh()
+        self.out = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(c1 + c1, out_channels, kernel_size=3, stride=1, padding=1),
+            nn.Tanh(),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass.
@@ -114,8 +121,7 @@ class Pix2PixGenerator(nn.Module):
         u3 = self.up3(u2)
         u3 = torch.cat([u3, d1], dim=1)
 
-        out = self.out(u3)
-        return self.out_act(out)
+        return self.out(u3)
 
 
 class PatchDiscriminator(nn.Module):

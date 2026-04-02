@@ -541,6 +541,11 @@ train:
   train_metric_interval: 0
 ```
 
+> [!IMPORTANT]
+> GAN 生成器上采样已改为 `Upsample + Conv2d` 以减轻棋盘格/马赛克伪影；
+> 同时 GAN 的 L1 权重统一使用 `loss.gan.lambda_l1`。
+> 因为网络结构已变更，旧的 `best_gan.pt` 与新代码不兼容，需要重新训练 GAN。
+
 可在 configs/default.yaml 中调整：
 
 - data.batch_size：建议 16 或 24（视显存）
