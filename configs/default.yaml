@@ -35,7 +35,7 @@ degradation:
   jpeg_quality_range: [70, 98]
 
 model:
-  type: unet  # unet | gan | diffusion
+  type: unet  # unet | gan | diffusion | vae
   in_channels: 3
   out_channels: 3
   base_channels: 64
@@ -46,17 +46,26 @@ model:
     beta_end: 0.02
     ddim_steps: 50  # number of steps for DDIM sampling during inference
     ddim_eta: 0.0   # stochasticity parameter: 0.0 for deterministic
+  vae:
+    latent_channels: 128
 
 loss:
   l1_weight: 100.0  # legacy field (GAN now uses loss.gan.lambda_l1)
   gan:
     lambda_l1: 100.0
     lambda_physics: 10.0
+    d_steps_per_g: 1
+    real_label_smooth: 0.9
   diffusion:
     noise_weight: 1.0  # weight for noise prediction MSE loss
+  vae:
+    kl_weight: 0.01
+    kl_warmup_epochs: 10
 
 optimizer:
   learning_rate: 0.0002
+  gan_lr_g: 0.0002
+  gan_lr_d: 0.0001  # conservative default to reduce late-epoch D/G oscillation; tune per run
   beta1: 0.5
   beta2: 0.999
   weight_decay: 0.0
