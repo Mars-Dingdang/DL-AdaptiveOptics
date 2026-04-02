@@ -226,8 +226,8 @@ def build_dataloaders(cfg: dict[str, Any], seed: int) -> tuple[DataLoader[Any], 
     return train_loader, val_loader
 
 
-def mean_stats(sum_stats: dict[str, float], count: int | dict[str, int]) -> dict[str, float]:
-    """Convert sum stats to mean stats."""
+def compute_mean_stats(sum_stats: dict[str, float], count: int | dict[str, int]) -> dict[str, float]:
+    """Compute mean stats from accumulated sums."""
     if isinstance(count, int):
         if count <= 0:
             return {k: 0.0 for k in sum_stats}

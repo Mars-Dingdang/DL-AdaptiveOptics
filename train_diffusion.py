@@ -16,8 +16,8 @@ from tqdm.auto import tqdm
 from modules.diffusion import ConditionalDiffusionModel, DiffusionConfig
 from train_common import (
     build_dataloaders,
+    compute_mean_stats,
     load_config,
-    mean_stats,
     parse_train_args,
     resolve_device,
     save_checkpoint,
@@ -122,7 +122,7 @@ def train_one_epoch_diffusion(
                 log_msg += f" psnr={batch_metrics['psnr']:.3f} ssim={batch_metrics['ssim']:.4f}"
             _safe_log(log_msg, use_tqdm=use_tqdm)
 
-    return mean_stats(sum_stats, sum_counts)
+    return compute_mean_stats(sum_stats, sum_counts)
 
 
 @torch.no_grad()
@@ -152,7 +152,7 @@ def evaluate_diffusion(
             sum_stats[k] += float(v)
         n_batches += 1
 
-    return mean_stats(sum_stats, n_batches)
+    return compute_mean_stats(sum_stats, n_batches)
 
 
 def main() -> None:

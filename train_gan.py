@@ -22,8 +22,8 @@ from modules.gan_models import (
 )
 from train_common import (
     build_dataloaders,
+    compute_mean_stats,
     load_config,
-    mean_stats,
     parse_train_args,
     resolve_device,
     save_checkpoint,
@@ -42,7 +42,7 @@ def _safe_log(message: str, use_tqdm: bool) -> None:
         print(message)
 
 
-def _set_requires_grad(module: nn.Module, flag: bool) -> None:
+def _toggle_requires_grad(module: nn.Module, flag: bool) -> None:
     for p in module.parameters():
         p.requires_grad_(flag)
 
@@ -87,7 +87,7 @@ def train_one_epoch_gan(
         compute_metrics_now = (metric_on_log and should_log) or (metric_interval > 0 and step % metric_interval == 0)
 
         # Update discriminator (possibly multiple steps / TTUR-style balancing).
-        _set_requires_grad(discriminator, True)
+        _toggle_requires_grad(discriminator, True)
         fake_clear = None
         loss_d = torch.tensor(0.0, device=device)
         for _ in range(max(1, d_steps_per_g)):
@@ -118,7 +118,7 @@ def train_one_epoch_gan(
                 optimizer_d.step()
 
         # Update generator.
-        _set_requires_grad(discriminator, False)
+        _toggle_requires_grad(discriminator, False)
         with autocast(enabled=use_amp):
             fake_clear = generator(degraded_n)
             pred_fake_for_g = discriminator(degraded_n, fake_clear)
@@ -149,8 +149,6 @@ def train_one_epoch_gan(
         if compute_metrics_now and fake_clear is not None:
             fake_01 = to_0_1(fake_clear.detach())
             batch_metrics = metrics.compute_batch(pred=fake_01, target=clear.detach())
-
-        _set_requires_grad(discriminator, True)
 
         sum_stats["d_loss"] += float(loss_d.detach().item())
         sum_counts["d_loss"] += 1
@@ -192,7 +190,7 @@ def train_one_epoch_gan(
                 log_msg += f" psnr={batch_metrics['psnr']:.3f} ssim={batch_metrics['ssim']:.4f}"
             _safe_log(log_msg, use_tqdm=use_tqdm)
 
-    return mean_stats(sum_stats, sum_counts)
+    return compute_mean_stats(sum_stats, sum_counts)
 
 
 @torch.no_grad()
@@ -242,7 +240,7 @@ def evaluate_gan(
             sum_stats[k] += float(v)
         n_batches += 1
 
-    return mean_stats(sum_stats, n_batches)
+    return compute_mean_stats(sum_stats, n_batches)
 
 
 def main() -> None:

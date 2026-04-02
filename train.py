@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _resolve_entrypoint(model_type: str) -> Callable[[], None]:
+def _select_training_main(model_type: str) -> Callable[[], None]:
     mt = model_type.lower().strip()
     if mt == "unet":
         return train_unet_main
@@ -49,7 +49,7 @@ def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
     model_type = str(cfg.get("model", {}).get("type", "unet"))
-    entrypoint = _resolve_entrypoint(model_type)
+    entrypoint = _select_training_main(model_type)
     entrypoint()
 
 

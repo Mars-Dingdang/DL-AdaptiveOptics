@@ -17,8 +17,8 @@ from tqdm.auto import tqdm
 from modules.vae import VAEConfig, build_conditional_vae, kl_divergence
 from train_common import (
     build_dataloaders,
+    compute_mean_stats,
     load_config,
-    mean_stats,
     parse_train_args,
     resolve_device,
     save_checkpoint,
@@ -126,7 +126,7 @@ def train_one_epoch_vae(
                 log_msg += f" psnr={batch_metrics['psnr']:.3f} ssim={batch_metrics['ssim']:.4f}"
             _safe_log(log_msg, use_tqdm=use_tqdm)
 
-    return mean_stats(sum_stats, sum_counts)
+    return compute_mean_stats(sum_stats, sum_counts)
 
 
 @torch.no_grad()
@@ -162,7 +162,7 @@ def evaluate_vae(
             sum_stats[k] += float(v)
         n_batches += 1
 
-    return mean_stats(sum_stats, n_batches)
+    return compute_mean_stats(sum_stats, n_batches)
 
 
 def main() -> None:
@@ -240,6 +240,7 @@ def main() -> None:
     loss_cfg = cfg["loss"]
     vae_loss_cfg = loss_cfg.get("vae", {})
     kl_weight_max = float(vae_loss_cfg.get("kl_weight", 0.01))
+    # `kl_warmup_epochs=1` means no warmup (full KL weight from first epoch).
     kl_warmup_epochs = max(1, int(vae_loss_cfg.get("kl_warmup_epochs", 10)))
 
     recon_criterion = nn.L1Loss()
@@ -248,7 +249,7 @@ def main() -> None:
     scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma) if use_scheduler else None
 
     for epoch in range(1, epochs + 1):
-        kl_weight = min(1.0, float(epoch) / float(kl_warmup_epochs)) * kl_weight_max
+        current_kl_weight = min(1.0, float(epoch) / float(kl_warmup_epochs)) * kl_weight_max
 
         train_stats = train_one_epoch_vae(
             model=model,
@@ -264,7 +265,7 @@ def main() -> None:
             scaler=scaler,
             metric_interval=train_metric_interval,
             metric_on_log=train_metric_on_log,
-            kl_weight=kl_weight,
+            kl_weight=current_kl_weight,
             use_tqdm=use_tqdm,
         )
 
@@ -280,7 +281,7 @@ def main() -> None:
                 recon_criterion=recon_criterion,
                 metrics=metric_computer,
                 device=device,
-                kl_weight=kl_weight,
+                kl_weight=current_kl_weight,
             )
             print(f"[Epoch {epoch}] val={val_stats}")
             metric_value = float(val_stats.get(monitor_name, -1e9))

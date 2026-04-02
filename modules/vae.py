@@ -125,10 +125,14 @@ class ConditionalVAE(nn.Module):
 
     @torch.no_grad()
     def reconstruct(self, degraded: torch.Tensor) -> torch.Tensor:
+        """Reconstruct clear image from degraded-only input at inference time."""
+        # Duplicate degraded as a proxy pair to reuse posterior encoder path when GT clear is unavailable.
         x = torch.cat([degraded, degraded], dim=1)
         h0 = self.enc_in(x)
         h1, skip1 = self.enc_down1(h0)
         h2, skip2 = self.enc_down2(h1)
+        # Use zero latent as deterministic fallback inference path.
+        # This keeps reconstruction stable and avoids stochastic output flicker in demo/eval.
         z = torch.zeros(
             (h2.shape[0], self.config.latent_channels, h2.shape[2], h2.shape[3]),
             device=degraded.device,
@@ -139,6 +143,7 @@ class ConditionalVAE(nn.Module):
 
 
 def kl_divergence(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    """Compute batch-mean KL(q(z|x)||N(0,I)) for latent tensors [B, C, H, W]."""
     return 0.5 * torch.mean(torch.exp(logvar) + mu.pow(2) - 1.0 - logvar)
 
 
