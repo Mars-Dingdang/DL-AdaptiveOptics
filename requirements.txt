@@ -13,3 +13,4 @@ torchvision>=0.17
 # Demo
 gradio>=4.44
 gradio-imageslider>=0.0.20
+tqdm>=4.66

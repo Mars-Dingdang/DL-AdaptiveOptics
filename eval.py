@@ -7,6 +7,8 @@ export side-by-side result images.
 Usage examples:
     python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --split val
     python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --split test
+
+20260402 1508
 """
 
 from __future__ import annotations

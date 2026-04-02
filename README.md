@@ -501,6 +501,46 @@ python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_d
 
 ## 5. 训练配置建议（RTX 5090 单卡）
 
+### 5.0 GAN 关键训练指标速查
+
+- g_adv：生成器对抗损失（越低通常表示更会“骗”判别器）
+- g_l1：像素 L1 重建损失（越低表示和 GT 更接近）
+- g_phy：物理一致性损失（生成图再退化后与输入退化图的一致性，越低越好）
+- g_total：生成器总损失（g_adv + lambda_l1 * g_l1 + lambda_physics * g_phy）
+- d_loss：判别器损失（用于观察 G/D 是否失衡，不是单纯越低越好）
+- psnr / ssim：重建质量指标（越高越好，建议在验证集上做模型选择）
+
+建议监控优先级：
+
+1. 验证集 psnr/ssim（选模型）
+2. 训练中 g_total 与 g_adv/g_l1/g_phy 的趋势（看是否收敛、是否偏科）
+3. d_loss（看 G/D 平衡）
+
+### 5.1 吞吐优先训练（fast_train + tqdm）
+
+最新版训练脚本已支持三种模型（UNet/GAN/Diffusion）统一 `tqdm` 进度条，显示 step、ETA、学习率和核心 loss。
+
+为减少训练中 CPU 指标计算导致的 GPU 空转，`configs/default.yaml` 中默认开启：
+
+```yaml
+train:
+  fast_train: true
+  tqdm: true
+  train_metric_on_log_fast: false
+  train_metric_interval_fast: 0
+```
+
+这表示训练阶段默认不高频计算 PSNR/SSIM（这些指标会在验证阶段稳定输出），从而提升平均 GPU 利用率。
+
+如果你更重视训练过程的即时指标，可关闭：
+
+```yaml
+train:
+  fast_train: false
+  train_metric_on_log: true
+  train_metric_interval: 0
+```
+
 可在 configs/default.yaml 中调整：
 
 - data.batch_size：建议 16 或 24（视显存）

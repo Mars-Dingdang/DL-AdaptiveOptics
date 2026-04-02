@@ -6,6 +6,8 @@ Supported model types:
 
 Usage:
     python train.py --config configs/default.yaml
+    
+20260402 1507
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader, Dataset, Subset
+from tqdm.auto import tqdm
 import yaml
 
 from data.dataset import DatasetParams, TurbulencePairDataset
@@ -263,6 +266,14 @@ def _mean_stats(sum_stats: dict[str, float], count: int | dict[str, int]) -> dic
     return out
 
 
+def _safe_log(message: str, use_tqdm: bool) -> None:
+    """Log message without breaking active tqdm bars."""
+    if use_tqdm:
+        tqdm.write(message)
+    else:
+        print(message)
+
+
 def train_one_epoch_unet(
     model: nn.Module,
     loader: DataLoader[Any],
@@ -276,6 +287,8 @@ def train_one_epoch_unet(
     amp_enabled: bool,
     scaler: GradScaler | None,
     metric_interval: int,
+    metric_on_log: bool,
+    use_tqdm: bool,
 ) -> dict[str, float]:
     """Train U-Net for one epoch."""
     model.train()
@@ -284,13 +297,22 @@ def train_one_epoch_unet(
     sum_stats: dict[str, float] = defaultdict(float)
     sum_counts: dict[str, int] = defaultdict(int)
 
-    for step, batch in enumerate(loader, start=1):
+    pbar = tqdm(
+        loader,
+        total=len(loader),
+        disable=not use_tqdm,
+        desc=f"Train UNet e{epoch}",
+        leave=False,
+        dynamic_ncols=True,
+    )
+
+    for step, batch in enumerate(pbar, start=1):
         degraded, clear = batch
         degraded = degraded.to(device, non_blocking=True)
         clear = clear.to(device, non_blocking=True)
 
         should_log = log_interval > 0 and (step % log_interval == 0 or step == len(loader))
-        compute_metrics_now = should_log or (metric_interval > 0 and step % metric_interval == 0)
+        compute_metrics_now = (metric_on_log and should_log) or (metric_interval > 0 and step % metric_interval == 0)
 
         with autocast(enabled=use_amp):
             pred = model(degraded)
@@ -323,6 +345,17 @@ def train_one_epoch_unet(
                 sum_stats[k] += float(v)
                 sum_counts[k] += 1
 
+        postfix: dict[str, str] = {
+            "loss": f"{loss.detach().item():.4f}",
+            "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
+        }
+        if batch_metrics is not None:
+            if "psnr" in batch_metrics:
+                postfix["psnr"] = f"{batch_metrics['psnr']:.2f}"
+            if "ssim" in batch_metrics:
+                postfix["ssim"] = f"{batch_metrics['ssim']:.3f}"
+        pbar.set_postfix(postfix)
+
         if should_log:
             log_msg = f"[Train][UNet] epoch={epoch} step={step}/{len(loader)} loss={loss.detach().item():.4f}"
             if batch_metrics is not None:
@@ -330,7 +363,7 @@ def train_one_epoch_unet(
                     log_msg += f" psnr={batch_metrics['psnr']:.3f} ssim={batch_metrics['ssim']:.4f}"
                 if "lpips" in batch_metrics:
                     log_msg += f" lpips={batch_metrics['lpips']:.4f}"
-            print(log_msg)
+            _safe_log(log_msg, use_tqdm=use_tqdm)
 
     return _mean_stats(sum_stats, sum_counts)
 
@@ -383,6 +416,8 @@ def train_one_epoch_gan(
     amp_enabled: bool,
     scaler: GradScaler | None,
     metric_interval: int,
+    metric_on_log: bool,
+    use_tqdm: bool,
 ) -> dict[str, float]:
     """Train conditional GAN for one epoch."""
     generator.train()
@@ -392,7 +427,16 @@ def train_one_epoch_gan(
     sum_stats: dict[str, float] = defaultdict(float)
     sum_counts: dict[str, int] = defaultdict(int)
 
-    for step, batch in enumerate(loader, start=1):
+    pbar = tqdm(
+        loader,
+        total=len(loader),
+        disable=not use_tqdm,
+        desc=f"Train GAN e{epoch}",
+        leave=False,
+        dynamic_ncols=True,
+    )
+
+    for step, batch in enumerate(pbar, start=1):
         degraded, clear = batch
         degraded = degraded.to(device, non_blocking=True)
         clear = clear.to(device, non_blocking=True)
@@ -401,7 +445,7 @@ def train_one_epoch_gan(
         clear_n = to_minus1_1(clear)
 
         should_log = log_interval > 0 and (step % log_interval == 0 or step == len(loader))
-        compute_metrics_now = should_log or (metric_interval > 0 and step % metric_interval == 0)
+        compute_metrics_now = (metric_on_log and should_log) or (metric_interval > 0 and step % metric_interval == 0)
 
         # Update discriminator.
         with autocast(enabled=use_amp):
@@ -477,6 +521,21 @@ def train_one_epoch_gan(
                 sum_stats[k] += float(v)
                 sum_counts[k] += 1
 
+        postfix: dict[str, str] = {
+            "d": f"{loss_d.detach().item():.4f}",
+            "g": f"{loss_g_total.detach().item():.4f}",
+            "g_adv": f"{g_stats['g_adv']:.3f}",
+            "g_l1": f"{g_stats['g_l1']:.3f}",
+            "g_phy": f"{g_stats['g_phy']:.3f}",
+            "lr_g": f"{optimizer_g.param_groups[0]['lr']:.2e}",
+        }
+        if batch_metrics is not None:
+            if "psnr" in batch_metrics:
+                postfix["psnr"] = f"{batch_metrics['psnr']:.2f}"
+            if "ssim" in batch_metrics:
+                postfix["ssim"] = f"{batch_metrics['ssim']:.3f}"
+        pbar.set_postfix(postfix)
+
         if should_log:
             log_msg = (
                 f"[Train][GAN] epoch={epoch} step={step}/{len(loader)} "
@@ -487,7 +546,7 @@ def train_one_epoch_gan(
                     log_msg += f" psnr={batch_metrics['psnr']:.3f} ssim={batch_metrics['ssim']:.4f}"
                 if "lpips" in batch_metrics:
                     log_msg += f" lpips={batch_metrics['lpips']:.4f}"
-            print(log_msg)
+            _safe_log(log_msg, use_tqdm=use_tqdm)
 
     return _mean_stats(sum_stats, sum_counts)
 
@@ -556,7 +615,9 @@ def train_one_epoch_diffusion(
     amp_enabled: bool,
     scaler: GradScaler | None,
     metric_interval: int,
+    metric_on_log: bool,
     ddim_steps: int,
+    use_tqdm: bool,
 ) -> dict[str, float]:
     """Train diffusion model for one epoch."""
     model.train()
@@ -565,7 +626,16 @@ def train_one_epoch_diffusion(
     sum_stats: dict[str, float] = defaultdict(float)
     sum_counts: dict[str, int] = defaultdict(int)
 
-    for step, batch in enumerate(loader, start=1):
+    pbar = tqdm(
+        loader,
+        total=len(loader),
+        disable=not use_tqdm,
+        desc=f"Train Diff e{epoch}",
+        leave=False,
+        dynamic_ncols=True,
+    )
+
+    for step, batch in enumerate(pbar, start=1):
         degraded, clear = batch
         degraded = degraded.to(device, non_blocking=True)
         clear = clear.to(device, non_blocking=True)
@@ -575,7 +645,7 @@ def train_one_epoch_diffusion(
         clear_n = to_minus1_1(clear)
 
         should_log = log_interval > 0 and (step % log_interval == 0 or step == len(loader))
-        compute_metrics_now = should_log or (metric_interval > 0 and step % metric_interval == 0)
+        compute_metrics_now = (metric_on_log and should_log) or (metric_interval > 0 and step % metric_interval == 0)
 
         # Sample random timesteps
         batch_size = clear.shape[0]
@@ -604,6 +674,7 @@ def train_one_epoch_diffusion(
         if compute_metrics_now:
             # Generate sample for metrics (expensive, so only when logging)
             with torch.no_grad():
+                pbar.set_postfix({"loss": f"{loss.detach().item():.4f}", "stage": "ddim_eval"})
                 model.eval()
                 pred_n = model.sample_ddim(cond=degraded_n, steps=ddim_steps)
                 model.train()
@@ -617,6 +688,18 @@ def train_one_epoch_diffusion(
                 sum_stats[k] += float(v)
                 sum_counts[k] += 1
 
+        postfix: dict[str, str] = {
+            "loss": f"{loss.detach().item():.4f}",
+            "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
+            "stage": "train",
+        }
+        if batch_metrics is not None:
+            if "psnr" in batch_metrics:
+                postfix["psnr"] = f"{batch_metrics['psnr']:.2f}"
+            if "ssim" in batch_metrics:
+                postfix["ssim"] = f"{batch_metrics['ssim']:.3f}"
+        pbar.set_postfix(postfix)
+
         if should_log:
             log_msg = f"[Train][Diffusion] epoch={epoch} step={step}/{len(loader)} loss={loss.detach().item():.4f}"
             if batch_metrics is not None:
@@ -624,7 +707,7 @@ def train_one_epoch_diffusion(
                     log_msg += f" psnr={batch_metrics['psnr']:.3f} ssim={batch_metrics['ssim']:.4f}"
                 if "lpips" in batch_metrics:
                     log_msg += f" lpips={batch_metrics['lpips']:.4f}"
-            print(log_msg)
+            _safe_log(log_msg, use_tqdm=use_tqdm)
 
     return _mean_stats(sum_stats, sum_counts)
 
@@ -714,6 +797,14 @@ def main() -> None:
     save_interval = int(train_cfg.get("save_interval", 5))
     max_grad_norm = float(train_cfg.get("max_grad_norm", 0.0))
     train_metric_interval = max(0, int(train_cfg.get("train_metric_interval", 0)))
+    train_metric_on_log = bool(train_cfg.get("train_metric_on_log", True))
+    use_tqdm = bool(train_cfg.get("tqdm", True))
+    fast_train = bool(train_cfg.get("fast_train", False))
+
+    if fast_train:
+        # Throughput-first mode: avoid expensive train-time metrics unless explicitly requested.
+        train_metric_on_log = bool(train_cfg.get("train_metric_on_log_fast", False))
+        train_metric_interval = max(0, int(train_cfg.get("train_metric_interval_fast", 0)))
 
     ckpt_cfg = cfg["checkpoint"]
     ckpt_dir = Path(ckpt_cfg.get("dir", "checkpoints"))
@@ -752,6 +843,8 @@ def main() -> None:
                 amp_enabled=amp_enabled,
                 scaler=scaler,
                 metric_interval=train_metric_interval,
+                metric_on_log=train_metric_on_log,
+                use_tqdm=use_tqdm,
             )
 
             if scheduler is not None:
@@ -848,6 +941,8 @@ def main() -> None:
                 amp_enabled=amp_enabled,
                 scaler=scaler,
                 metric_interval=train_metric_interval,
+                metric_on_log=train_metric_on_log,
+                use_tqdm=use_tqdm,
             )
 
             if scheduler_g is not None:
@@ -951,7 +1046,9 @@ def main() -> None:
                 amp_enabled=amp_enabled,
                 scaler=scaler,
                 metric_interval=train_metric_interval,
+                metric_on_log=train_metric_on_log,
                 ddim_steps=ddim_steps,
+                use_tqdm=use_tqdm,
             )
 
             if scheduler is not None:

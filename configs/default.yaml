@@ -68,11 +68,17 @@ scheduler:
 
 train:
   epochs: 50
+  fast_train: true  # throughput-first mode: reduce expensive train-time image metrics
+  tqdm: true
   log_interval: 20
   val_interval: 1
   save_interval: 5
   max_grad_norm: 0.0
-  train_metric_interval: 0  # 0 means train metrics are only computed at log steps.
+  train_metric_on_log: true
+  train_metric_interval: 0  # 0 means train metrics only follow train_metric_on_log behavior.
+  # Overrides when fast_train=true.
+  train_metric_on_log_fast: false
+  train_metric_interval_fast: 0
 
 metrics:
   compute_lpips: false
