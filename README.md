@@ -231,13 +231,18 @@ Project/
   - 原理：环境可复现
 
 - train.py
-  - 作用：统一训练入口
+  - 作用：兼容调度入口（根据 `model.type` 分发到独立训练脚本）
   - 实现方式：
     - 读取 YAML 配置
-    - 构建数据集与 DataLoader
-    - 支持 unet/gan 两种训练循环
-    - 指标监控与 checkpoint 保存
-  - 原理：配置驱动 + 模型解耦
+    - 自动分发到 `train_unet.py` / `train_gan.py` / `train_diffusion.py` / `train_vae.py`
+  - 原理：保持历史命令兼容，同时降低单文件复杂度
+
+- train_unet.py / train_gan.py / train_diffusion.py / train_vae.py
+  - 作用：独立训练入口，便于单模型调试
+  - 实现方式：
+    - 每个脚本维护独立训练循环和 checkpoint 逻辑
+    - 公共配置/数据加载能力复用 `train_common.py`
+  - 原理：职责分离，减少耦合和回归风险
 
 - eval.py
   - 作用：统一离线评估入口
@@ -296,6 +301,14 @@ Project/
     - 噪声预测目标 p_losses
     - DDIM 采样 sample_ddim
   - 原理：通过逐步去噪建模复杂条件分布
+
+- modules/vae.py
+  - 作用：条件 VAE 复原模型
+  - 实现方式：
+    - 条件编码器（输入退化图+真值图）学习后验
+    - 重参数化采样
+    - 条件解码器重建清晰图
+  - 原理：通过概率潜变量建模退化到清晰映射的不确定性
 
 ### 3.5 utils
 
@@ -392,7 +405,7 @@ python data/get_data.py --dataset uc_merced
 ### 4.7 开始训练（U-Net 默认配置）
 
 ```powershell
-python train.py --config configs/default.yaml
+python train_unet.py --config configs/default.yaml
 ```
 
 训练输出：
@@ -407,7 +420,7 @@ python train.py --config configs/default.yaml
 ```powershell
 Copy-Item configs/default.yaml configs/train_gan.yaml
 (Get-Content configs/train_gan.yaml) -replace 'type: unet', 'type: gan' | Set-Content configs/train_gan.yaml
-python train.py --config configs/train_gan.yaml
+python train_gan.py --config configs/train_gan.yaml
 ```
 
 训练输出：
@@ -422,7 +435,7 @@ python train.py --config configs/train_gan.yaml
 ```powershell
 Copy-Item configs/default.yaml configs/train_diffusion.yaml
 (Get-Content configs/train_diffusion.yaml) -replace 'type: unet', 'type: diffusion' | Set-Content configs/train_diffusion.yaml
-python train.py --config configs/train_diffusion.yaml
+python train_diffusion.py --config configs/train_diffusion.yaml
 ```
 
 训练输出：
@@ -431,6 +444,19 @@ python train.py --config configs/train_diffusion.yaml
 - checkpoints/diffusion_epoch_*.pt
 
 注意：Diffusion 模型训练较慢，因为每次验证都需要运行 DDIM 采样。建议适当降低 val_interval 或使用较小的验证集。
+
+### 4.8.2 训练 VAE（新增）
+
+```powershell
+Copy-Item configs/default.yaml configs/train_vae.yaml
+(Get-Content configs/train_vae.yaml) -replace 'type: unet', 'type: vae' | Set-Content configs/train_vae.yaml
+python train_vae.py --config configs/train_vae.yaml
+```
+
+训练输出：
+
+- checkpoints/best_vae.pt
+- checkpoints/vae_epoch_*.pt
 
 ### 4.9 离线评估
 
@@ -450,6 +476,12 @@ python eval.py --config configs/default.yaml --checkpoint checkpoints/best_gan.p
 
 ```powershell
 python eval.py --config configs/default.yaml --checkpoint checkpoints/best_diffusion.pt --model-type diffusion --split val --save-images --out-dir outputs/eval_diffusion
+```
+
+评估 VAE：
+
+```powershell
+python eval.py --config configs/default.yaml --checkpoint checkpoints/best_vae.pt --model-type vae --split val --save-images --out-dir outputs/eval_vae
 ```
 
 最终测试集评估（仅在模型定版后运行）：
@@ -493,6 +525,12 @@ python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_g
 python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_diffusion.pt --model-type diffusion --host 127.0.0.1 --port 7860
 ```
 
+启动 VAE Demo：
+
+```powershell
+python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_vae.pt --model-type vae --host 127.0.0.1 --port 7860
+```
+
 浏览器打开：
 
 - http://127.0.0.1:7860
@@ -500,6 +538,51 @@ python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_d
 ---
 
 ## 5. 训练配置建议（RTX 5090 单卡）
+
+### 5.0 GAN 关键训练指标速查
+
+- g_adv：生成器对抗损失（越低通常表示更会“骗”判别器）
+- g_l1：像素 L1 重建损失（越低表示和 GT 更接近）
+- g_phy：物理一致性损失（生成图再退化后与输入退化图的一致性，越低越好）
+- g_total：生成器总损失（g_adv + lambda_l1 * g_l1 + lambda_physics * g_phy）
+- d_loss：判别器损失（用于观察 G/D 是否失衡，不是单纯越低越好）
+- psnr / ssim：重建质量指标（越高越好，建议在验证集上做模型选择）
+
+建议监控优先级：
+
+1. 验证集 psnr/ssim（选模型）
+2. 训练中 g_total 与 g_adv/g_l1/g_phy 的趋势（看是否收敛、是否偏科）
+3. d_loss（看 G/D 平衡）
+
+### 5.1 吞吐优先训练（fast_train + tqdm）
+
+最新版训练脚本已支持三种模型（UNet/GAN/Diffusion）统一 `tqdm` 进度条，显示 step、ETA、学习率和核心 loss。
+
+为减少训练中 CPU 指标计算导致的 GPU 空转，`configs/default.yaml` 中默认开启：
+
+```yaml
+train:
+  fast_train: true
+  tqdm: true
+  train_metric_on_log_fast: false
+  train_metric_interval_fast: 0
+```
+
+这表示训练阶段默认不高频计算 PSNR/SSIM（这些指标会在验证阶段稳定输出），从而提升平均 GPU 利用率。
+
+如果你更重视训练过程的即时指标，可关闭：
+
+```yaml
+train:
+  fast_train: false
+  train_metric_on_log: true
+  train_metric_interval: 0
+```
+
+> [!IMPORTANT]
+> GAN 生成器上采样已改为 `Upsample + Conv2d` 以减轻棋盘格/马赛克伪影；
+> 同时 GAN 的 L1 权重统一使用 `loss.gan.lambda_l1`。
+> 因为网络结构已变更，旧的 `best_gan.pt` 与新代码不兼容，需要重新训练 GAN。
 
 可在 configs/default.yaml 中调整：
 
@@ -547,7 +630,7 @@ cd C:/Users/23826/Desktop/university/Grade1-2/DL/Project
 conda activate DLProject
 python -m pip install -r requirements.txt
 python data/get_data.py --dataset uc_merced
-python train.py --config configs/default.yaml
+python train_unet.py --config configs/default.yaml
 python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt
 ```
 
@@ -617,7 +700,7 @@ python data/get_data.py --dataset uc_merced
 ### 8.7 开始训练（U-Net 默认配置）
 
 ```bash
-python train.py --config configs/default.yaml
+python train_unet.py --config configs/default.yaml
 ```
 
 ### 8.8 训练 GAN（可选）
@@ -625,7 +708,7 @@ python train.py --config configs/default.yaml
 ```bash
 cp configs/default.yaml configs/train_gan.yaml
 sed -i 's/type: unet/type: gan/' configs/train_gan.yaml
-python train.py --config configs/train_gan.yaml
+python train_gan.py --config configs/train_gan.yaml
 ```
 
 如果你的系统是 macOS（BSD sed），请用：
@@ -639,7 +722,7 @@ sed -i '' 's/type: unet/type: gan/' configs/train_gan.yaml
 ```bash
 cp configs/default.yaml configs/train_diffusion.yaml
 sed -i 's/type: unet/type: diffusion/' configs/train_diffusion.yaml
-python train.py --config configs/train_diffusion.yaml
+python train_diffusion.py --config configs/train_diffusion.yaml
 ```
 
 如果你的系统是 macOS（BSD sed），请用：
@@ -649,6 +732,20 @@ sed -i '' 's/type: unet/type: diffusion/' configs/train_diffusion.yaml
 ```
 
 注意：Diffusion 模型训练较慢，因为每次验证都需要运行 DDIM 采样。建议适当降低 val_interval 或使用较小的验证集。
+
+### 8.8.2 训练 VAE（新增）
+
+```bash
+cp configs/default.yaml configs/train_vae.yaml
+sed -i 's/type: unet/type: vae/' configs/train_vae.yaml
+python train_vae.py --config configs/train_vae.yaml
+```
+
+如果你的系统是 macOS（BSD sed），请用：
+
+```bash
+sed -i '' 's/type: unet/type: vae/' configs/train_vae.yaml
+```
 
 ### 8.9 离线评估
 
@@ -668,6 +765,12 @@ python eval.py --config configs/default.yaml --checkpoint checkpoints/best_gan.p
 
 ```bash
 python eval.py --config configs/default.yaml --checkpoint checkpoints/best_diffusion.pt --model-type diffusion --split val --save-images --out-dir outputs/eval_diffusion
+```
+
+评估 VAE：
+
+```bash
+python eval.py --config configs/default.yaml --checkpoint checkpoints/best_vae.pt --model-type vae --split val --save-images --out-dir outputs/eval_vae
 ```
 
 最终测试集评估（模型定版后仅运行一次）：
@@ -694,6 +797,12 @@ python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_g
 python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_diffusion.pt --model-type diffusion --host 0.0.0.0 --port 7860
 ```
 
+启动 VAE Demo：
+
+```bash
+python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_vae.pt --model-type vae --host 0.0.0.0 --port 7860
+```
+
 如果需要公网访问：
 
 ```bash
@@ -708,6 +817,6 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate DLProject
 python -m pip install -r requirements.txt
 python data/get_data.py --dataset uc_merced
-python train.py --config configs/default.yaml
+python train_unet.py --config configs/default.yaml
 python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --host 0.0.0.0 --port 7860
 ```

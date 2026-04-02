@@ -7,6 +7,8 @@ export side-by-side result images.
 Usage examples:
     python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --split val
     python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --split test
+
+20260402 1508
 """
 
 from __future__ import annotations
@@ -24,7 +26,8 @@ from data.dataset import DatasetParams, TurbulencePairDataset
 from modules.baseline_unet import build_baseline_unet
 from modules.gan_models import build_pix2pix_models
 from modules.diffusion import ConditionalDiffusionModel, DiffusionConfig
-from train import (
+from modules.vae import VAEConfig, build_conditional_vae
+from train_common import (
     build_turbulence_params,
     load_config,
     resolve_device,
@@ -52,7 +55,7 @@ def parse_args() -> argparse.Namespace:
         "--model-type",
         type=str,
         default="",
-        choices=["", "unet", "gan", "diffusion"],
+        choices=["", "unet", "gan", "diffusion", "vae"],
         help="Optional model type override. If empty, infer from checkpoint/config.",
     )
     parser.add_argument("--batch-size", type=int, default=0, help="Override eval batch size if > 0")
@@ -150,7 +153,7 @@ def infer_model_type(ckpt: dict[str, Any], cfg: dict[str, Any], arg_type: str) -
     if arg_type:
         return arg_type
     ckpt_type = str(ckpt.get("model_type", "")).lower().strip()
-    if ckpt_type in {"unet", "gan", "diffusion"}:
+    if ckpt_type in {"unet", "gan", "diffusion", "vae"}:
         return ckpt_type
     return str(cfg["model"]["type"]).lower().strip()
 
@@ -322,6 +325,47 @@ def main() -> None:
                         pred_batch=pred.detach().cpu(),
                         out_dir=out_dir / "samples",
                         prefix="diffusion",
+                        start_index=saved_count,
+                        max_items=can_save,
+                    )
+
+    elif model_type == "vae":
+        vae_cfg = model_cfg.get("vae", {})
+        vae_config = VAEConfig(
+            in_channels=int(model_cfg.get("in_channels", 3)),
+            out_channels=int(model_cfg.get("out_channels", 3)),
+            cond_channels=int(model_cfg.get("in_channels", 3)),
+            base_channels=int(model_cfg.get("base_channels", 64)),
+            latent_channels=int(vae_cfg.get("latent_channels", 128)),
+        )
+        model = build_conditional_vae(config=vae_config).to(device)
+
+        state = ckpt.get("model_state")
+        if state is None:
+            raise RuntimeError("Checkpoint missing 'model_state' for vae evaluation.")
+        model.load_state_dict(state, strict=True)
+        model.eval()
+
+        with torch.no_grad():
+            for batch_idx, (degraded, clear) in enumerate(loader):
+                degraded = degraded.to(device, non_blocking=True)
+                clear = clear.to(device, non_blocking=True)
+
+                pred = model.reconstruct(degraded).clamp(0.0, 1.0)
+                batch_metrics = metric_computer.compute_batch(pred=pred, target=clear)
+
+                for k, v in batch_metrics.items():
+                    sum_stats[k] += float(v)
+                n_batches += 1
+
+                if args.save_images and saved_count < args.max_save:
+                    can_save = min(int(args.max_save - saved_count), pred.shape[0])
+                    saved_count += save_batch_triplets(
+                        degraded_batch=degraded.detach().cpu(),
+                        target_batch=clear.detach().cpu(),
+                        pred_batch=pred.detach().cpu(),
+                        out_dir=out_dir / "samples",
+                        prefix="vae",
                         start_index=saved_count,
                         max_items=can_save,
                     )
