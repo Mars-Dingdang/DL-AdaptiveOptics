@@ -29,7 +29,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from modules.baseline_unet import build_baseline_unet
 from modules.gan_models import build_pix2pix_models
-from train import load_config, resolve_device, to_0_1, to_minus1_1
+from modules.vae import VAEConfig, build_conditional_vae
+from train_common import load_config, resolve_device, to_0_1, to_minus1_1
 
 
 try:
@@ -50,7 +51,7 @@ def parse_args() -> argparse.Namespace:
         "--model-type",
         type=str,
         default="",
-        choices=["", "unet", "gan"],
+        choices=["", "unet", "gan", "vae"],
         help="Optional model type override.",
     )
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Launch host")
@@ -64,7 +65,7 @@ def infer_model_type(ckpt: dict[str, Any], cfg: dict[str, Any], arg_type: str) -
     if arg_type:
         return arg_type
     ckpt_type = str(ckpt.get("model_type", "")).lower().strip()
-    if ckpt_type in {"unet", "gan"}:
+    if ckpt_type in {"unet", "gan", "vae"}:
         return ckpt_type
     return str(cfg["model"]["type"]).lower().strip()
 
@@ -143,6 +144,23 @@ class InferenceEngine:
             self.model = None
             self.generator = generator
 
+        elif self.model_type == "vae":
+            vae_cfg = model_cfg.get("vae", {})
+            vae_config = VAEConfig(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                cond_channels=in_channels,
+                base_channels=base_channels,
+                latent_channels=int(vae_cfg.get("latent_channels", 128)),
+            )
+            self.model = build_conditional_vae(config=vae_config).to(self.device)
+            state = ckpt.get("model_state")
+            if state is None:
+                raise RuntimeError("Checkpoint missing 'model_state' for VAE model.")
+            self.model.load_state_dict(state, strict=True)
+            self.model.eval()
+            self.generator = None
+
         else:
             raise ValueError(f"Unsupported model type: {self.model_type}")
 
@@ -163,9 +181,12 @@ class InferenceEngine:
         x = np.transpose(x, (2, 0, 1))
         x_t = torch.from_numpy(np.ascontiguousarray(x)).unsqueeze(0).to(self.device)
 
-        if self.model_type == "unet":
+        if self.model_type in {"unet", "vae"}:
             assert self.model is not None
-            pred = self.model(x_t).clamp(0.0, 1.0)
+            if self.model_type == "unet":
+                pred = self.model(x_t).clamp(0.0, 1.0)
+            else:
+                pred = self.model.reconstruct(x_t).clamp(0.0, 1.0)
         else:
             assert self.generator is not None
             pred_n = self.generator(to_minus1_1(x_t))

@@ -238,10 +238,15 @@ def generator_adversarial_loss(pred_fake_logits: torch.Tensor) -> torch.Tensor:
     return F.binary_cross_entropy_with_logits(pred_fake_logits, target_real)
 
 
-def discriminator_loss(pred_real_logits: torch.Tensor, pred_fake_logits: torch.Tensor) -> torch.Tensor:
-    """Standard discriminator objective with BCE logits."""
-    target_real = torch.ones_like(pred_real_logits)
-    target_fake = torch.zeros_like(pred_fake_logits)
+def discriminator_loss(
+    pred_real_logits: torch.Tensor,
+    pred_fake_logits: torch.Tensor,
+    real_label: float = 1.0,
+    fake_label: float = 0.0,
+) -> torch.Tensor:
+    """Standard discriminator objective with BCE logits and optional label smoothing."""
+    target_real = torch.full_like(pred_real_logits, fill_value=float(real_label))
+    target_fake = torch.full_like(pred_fake_logits, fill_value=float(fake_label))
 
     loss_real = F.binary_cross_entropy_with_logits(pred_real_logits, target_real)
     loss_fake = F.binary_cross_entropy_with_logits(pred_fake_logits, target_fake)
