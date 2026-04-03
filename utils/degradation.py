@@ -14,6 +14,7 @@ Main entrypoint:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib
 import math
 from typing import Any
 
@@ -21,19 +22,140 @@ import cv2
 import numpy as np
 
 
+_TURBSIM_ADAPTERS: dict[str, Any] = {}
+
+
+class SimpleParametricAdapter:
+    """Fast fallback simulator using lightweight geometric blur/noise approximations."""
+
+    name = "simple_parametric"
+
+    def simulate_sequence(
+        self,
+        clean_image: np.ndarray,
+        num_frames: int,
+        context: dict[str, float],
+        params: Any,
+        rng: np.random.Generator,
+    ) -> tuple[np.ndarray, list[dict[str, Any]]]:
+        clean = np.clip(clean_image.astype(np.float32), 0.0, 1.0)
+        if clean.ndim != 3:
+            raise ValueError("simple_parametric expects HxWxC input")
+
+        h, w = clean.shape[:2]
+        n_frames = max(1, int(num_frames))
+
+        wind = float(context.get("wind_speed", 1.0))
+        cn2 = float(context.get("cn2", 1e-15))
+        strength = float(getattr(params, "turbulence_strength", 0.5))
+
+        shift_sigma = 0.8 + 1.8 * np.clip(wind, 0.0, 3.0)
+        blur_sigma_base = 0.6 + 4.0 * np.clip((cn2 / 5e-15), 0.0, 1.0) * np.clip(strength, 0.0, 1.5)
+
+        frames: list[np.ndarray] = []
+        metas: list[dict[str, Any]] = []
+
+        for frame_idx in range(n_frames):
+            jitter_x = float(rng.normal(0.0, shift_sigma))
+            jitter_y = float(rng.normal(0.0, shift_sigma))
+            affine = np.array([[1.0, 0.0, jitter_x], [0.0, 1.0, jitter_y]], dtype=np.float32)
+            warped = cv2.warpAffine(
+                clean,
+                affine,
+                dsize=(w, h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REFLECT101,
+            )
+
+            blur_sigma = float(blur_sigma_base * (0.85 + 0.3 * rng.random()))
+            ksize = int(max(3, 2 * int(np.ceil(blur_sigma * 2.0)) + 1))
+            blurred = cv2.GaussianBlur(warped, (ksize, ksize), sigmaX=blur_sigma, sigmaY=blur_sigma)
+
+            noisy, poisson_scale, gaussian_std = add_sensor_noise(
+                image=blurred,
+                rng=rng,
+                poisson_scale_range=getattr(params, "poisson_scale_range", (40.0, 120.0)),
+                gaussian_noise_std_range=getattr(params, "gaussian_noise_std_range", (0.003, 0.02)),
+            )
+            compressed, jpeg_quality = add_jpeg_artifact(
+                image=noisy,
+                rng=rng,
+                quality_range=getattr(params, "jpeg_quality_range", (70, 98)),
+            )
+
+            frame = np.clip(compressed, 0.0, 1.0).astype(np.float32)
+            frames.append(frame)
+            metas.append(
+                {
+                    "frame_idx": int(frame_idx),
+                    "sim_backend": self.name,
+                    "cn2": cn2,
+                    "focal_length": float(context.get("focal_length", 0.0)),
+                    "wind_speed": wind,
+                    "time_step": float(context.get("time_step", 0.03)),
+                    "jitter_x": jitter_x,
+                    "jitter_y": jitter_y,
+                    "blur_sigma": blur_sigma,
+                    "poisson_scale": float(poisson_scale),
+                    "gaussian_std": float(gaussian_std),
+                    "jpeg_quality": int(jpeg_quality),
+                    "device": "cpu-fast",
+                }
+            )
+
+        return np.stack(frames, axis=0).astype(np.float32), metas
+
+
+def _get_turbsim_adapter(backend: str) -> Any:
+    """Lazily create and cache the requested TurbulenceSim adapter."""
+    backend_norm = str(backend).lower().strip()
+    adapter = _TURBSIM_ADAPTERS.get(backend_norm)
+    if adapter is not None:
+        return adapter
+
+    if backend_norm == "simple_parametric":
+        adapter = SimpleParametricAdapter()
+    elif backend_norm == "turbsim_gpu_v1":
+        gpu_pkg = importlib.import_module("utils.TurbulenceSimGPU")
+        adapter_cls = getattr(gpu_pkg, "TurbulenceSimGPUAdapter", None)
+        if adapter_cls is None:
+            adapter_cls = getattr(gpu_pkg, "TurbulenceSimV1Adapter")
+        adapter = adapter_cls()
+    else:
+        from utils.TurbulenceSim.simulator import TurbulenceSimV1Adapter
+
+        adapter = TurbulenceSimV1Adapter()
+
+    _TURBSIM_ADAPTERS[backend_norm] = adapter
+    return adapter
+
+
 @dataclass
 class TurbulenceParams:
     """Config for atmospheric turbulence and sensor degradation."""
 
+    backend: str = "turbsim_gpu_v1"
     zernike_order: int = 6
-    phase_strength: float = 1.5
-    psf_kernel_size: int = 31
+    phase_strength: float = 0.12
+    psf_kernel_size: int = 5
     gaussian_sigma_range: tuple[float, float] = (0.3, 1.2)
     motion_blur_prob: float = 0.25
     motion_blur_kernel_range: tuple[int, int] = (7, 17)
     poisson_scale_range: tuple[float, float] = (40.0, 120.0)
     gaussian_noise_std_range: tuple[float, float] = (0.003, 0.02)
     jpeg_quality_range: tuple[int, int] = (70, 98)
+    cn2_range: tuple[float, float] = (1e-16, 5e-15)
+    focal_length_range: tuple[float, float] = (6000.0, 18000.0)
+    wind_speed_range: tuple[float, float] = (0.5, 2.0)
+    sequence_time_step: float = 0.03
+    aperture_diameter: float = 0.2
+    wavelength: float = 0.525e-6
+    object_size: float = 2.06
+    turbulence_strength: float = 0.45
+    turbsim_luma_only: bool = False
+    turbsim_patch_grid_downsample: int = 1
+    turbsim_psf_resolution: int = 32
+    turbsim_reuse_psf_per_frame: bool = False
 
 
 def _ensure_odd(value: int) -> int:
@@ -256,7 +378,7 @@ def add_atmospheric_turbulence(
     rng: np.random.Generator | None = None,
     return_meta: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, dict[str, Any]]:
-    """Apply atmospheric turbulence and sensor degradation pipeline.
+    """Apply single-frame atmospheric turbulence using TurbulenceSim-v1.
 
     Args:
         image: Input image, shape HxW or HxWxC. Supports uint8 or float arrays.
@@ -270,67 +392,57 @@ def add_atmospheric_turbulence(
     params = params or TurbulenceParams()
     rng = rng or np.random.default_rng()
 
-    image_f = _to_float_image(image)
-
-    sigma = float(rng.uniform(*params.gaussian_sigma_range))
-    sigma = max(0.0, sigma)
-    if sigma > 1e-6:
-        ksize = _ensure_odd(int(round(6.0 * sigma)) + 1)
-        image_f = cv2.GaussianBlur(
-            src=image_f,
-            ksize=(ksize, ksize),
-            sigmaX=sigma,
-            sigmaY=sigma,
-            borderType=cv2.BORDER_REFLECT101,
-        )
-
-    phase_screen = generate_phase_screen(
-        size=max(image_f.shape[0], image_f.shape[1]),
-        max_order=params.zernike_order,
-        strength=params.phase_strength,
+    seq, metas = add_atmospheric_turbulence_sequence(
+        image=image,
+        num_frames=1,
+        params=params,
         rng=rng,
+        context=None,
+        return_meta=True,
     )
-    psf = phase_screen_to_psf(phase_screen=phase_screen, kernel_size=params.psf_kernel_size)
-    image_f = apply_psf_blur(image=image_f, psf=psf)
-
-    use_motion = bool(rng.uniform(0.0, 1.0) < params.motion_blur_prob)
-    motion_len = 0
-    motion_angle = 0.0
-    if use_motion:
-        low, high = params.motion_blur_kernel_range
-        motion_len = _ensure_odd(int(rng.integers(low=max(3, low), high=max(low + 1, high + 1))))
-        motion_angle = float(rng.uniform(0.0, 180.0))
-        motion_kernel = _sample_motion_kernel(length=motion_len, angle=motion_angle)
-        image_f = apply_psf_blur(image=image_f, psf=motion_kernel)
-
-    image_f, poisson_scale, gaussian_std = add_sensor_noise(
-        image=image_f,
-        rng=rng,
-        poisson_scale_range=params.poisson_scale_range,
-        gaussian_noise_std_range=params.gaussian_noise_std_range,
-    )
-
-    image_f, jpeg_quality = add_jpeg_artifact(
-        image=image_f,
-        rng=rng,
-        quality_range=params.jpeg_quality_range,
-    )
-
-    image_f = np.clip(image_f, 0.0, 1.0).astype(np.float32)
-
+    frame = seq[0]
     if not return_meta:
-        return image_f
+        return frame
+    return frame, metas[0]
 
-    meta: dict[str, Any] = {
-        "gaussian_sigma": sigma,
-        "zernike_order": params.zernike_order,
-        "phase_strength": params.phase_strength,
-        "psf_kernel_size": params.psf_kernel_size,
-        "motion_used": use_motion,
-        "motion_kernel_size": motion_len,
-        "motion_angle": motion_angle,
-        "poisson_scale": poisson_scale,
-        "gaussian_noise_std": gaussian_std,
-        "jpeg_quality": jpeg_quality,
+
+def sample_turbulence_context(
+    params: TurbulenceParams,
+    rng: np.random.Generator,
+) -> dict[str, float]:
+    """Sample sample-level physical parameters for sequence simulation."""
+    return {
+        "cn2": float(rng.uniform(*params.cn2_range)),
+        "focal_length": float(rng.uniform(*params.focal_length_range)),
+        "wind_speed": float(rng.uniform(*params.wind_speed_range)),
+        "time_step": float(params.sequence_time_step),
     }
-    return image_f, meta
+
+
+def add_atmospheric_turbulence_sequence(
+    image: np.ndarray,
+    num_frames: int,
+    params: TurbulenceParams | None = None,
+    rng: np.random.Generator | None = None,
+    context: dict[str, float] | None = None,
+    return_meta: bool = False,
+) -> np.ndarray | tuple[np.ndarray, list[dict[str, Any]]]:
+    """Generate a turbulence sequence with shape [T, H, W, C] via TurbulenceSim-v1."""
+    params = params or TurbulenceParams()
+    rng = rng or np.random.default_rng()
+
+    n_frames = max(1, int(num_frames))
+    image_f = _to_float_image(image)
+    sample_context = context or sample_turbulence_context(params=params, rng=rng)
+
+    adapter = _get_turbsim_adapter(params.backend)
+    seq, metas = adapter.simulate_sequence(
+        clean_image=image_f,
+        num_frames=n_frames,
+        context=sample_context,
+        params=params,
+        rng=rng,
+    )
+    if return_meta:
+        return seq, metas
+    return seq

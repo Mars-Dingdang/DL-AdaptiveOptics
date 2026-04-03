@@ -12,7 +12,13 @@ import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 import yaml
 
-from data.dataset import DatasetParams, TurbulencePairDataset
+from data.dataset import (
+    DatasetParams,
+    SequenceDatasetParams,
+    TurbulencePairDataset,
+    TurbulenceSequenceDataset,
+    TurbulenceSequenceLmdbDataset,
+)
 from utils.degradation import TurbulenceParams
 
 
@@ -74,6 +80,7 @@ def build_turbulence_params(cfg: dict[str, Any]) -> TurbulenceParams:
     """Build turbulence parameters from config."""
     dcfg = cfg["degradation"]
     return TurbulenceParams(
+        backend=str(dcfg.get("backend", "turbsim_gpu_v1")),
         zernike_order=int(dcfg["zernike_order"]),
         phase_strength=float(dcfg["phase_strength"]),
         psf_kernel_size=int(dcfg["psf_kernel_size"]),
@@ -86,6 +93,20 @@ def build_turbulence_params(cfg: dict[str, Any]) -> TurbulenceParams:
             float(dcfg["gaussian_noise_std_range"][1]),
         ),
         jpeg_quality_range=(int(dcfg["jpeg_quality_range"][0]), int(dcfg["jpeg_quality_range"][1])),
+        cn2_range=(float(dcfg.get("cn2_range", [1e-16, 5e-14])[0]), float(dcfg.get("cn2_range", [1e-16, 5e-14])[1])),
+        focal_length_range=(
+            float(dcfg.get("focal_length_range", [35.0, 300.0])[0]),
+            float(dcfg.get("focal_length_range", [35.0, 300.0])[1]),
+        ),
+        wind_speed_range=(
+            float(dcfg.get("wind_speed_range", [1.0, 20.0])[0]),
+            float(dcfg.get("wind_speed_range", [1.0, 20.0])[1]),
+        ),
+        sequence_time_step=float(dcfg.get("sequence_time_step", 0.03)),
+        aperture_diameter=float(dcfg.get("aperture_diameter", 0.2)),
+        wavelength=float(dcfg.get("wavelength", 0.525e-6)),
+        object_size=float(dcfg.get("object_size", 2.06)),
+        turbulence_strength=float(dcfg.get("turbulence_strength", 1.8)),
     )
 
 
@@ -131,36 +152,79 @@ def build_datasets(cfg: dict[str, Any], seed: int) -> tuple[Dataset[Any], Datase
     """
     data_cfg = cfg["data"]
     turbulence_params = build_turbulence_params(cfg)
+    data_mode = str(data_cfg.get("mode", "single")).lower().strip()
 
     train_root = Path(data_cfg["train_root"])
     val_root_str = str(data_cfg.get("val_root", "")).strip()
 
-    train_ds_params = DatasetParams(
-        image_size=int(data_cfg["image_size"]),
-        random_crop=bool(data_cfg["random_crop"]),
-        horizontal_flip_prob=float(data_cfg["horizontal_flip_prob"]),
-    )
-    val_ds_params = DatasetParams(
-        image_size=int(data_cfg["image_size"]),
-        random_crop=False,
-        horizontal_flip_prob=0.0,
-    )
+    if data_mode == "sequence":
+        sequence_storage = str(data_cfg.get("sequence_storage", "folder")).lower().strip()
+        train_ds_params = SequenceDatasetParams(
+            image_size=int(data_cfg["image_size"]),
+            num_frames=int(data_cfg.get("num_frames", 7)),
+            random_crop=bool(data_cfg["random_crop"]),
+            horizontal_flip_prob=float(data_cfg["horizontal_flip_prob"]),
+        )
+        val_ds_params = SequenceDatasetParams(
+            image_size=int(data_cfg["image_size"]),
+            num_frames=int(data_cfg.get("num_frames", 7)),
+            random_crop=False,
+            horizontal_flip_prob=0.0,
+        )
+        if sequence_storage == "lmdb":
+            train_full = TurbulenceSequenceLmdbDataset(
+                lmdb_root=train_root,
+                dataset_params=train_ds_params,
+                seed=seed,
+            )
+        else:
+            train_full = TurbulenceSequenceDataset(
+                root_dir=train_root,
+                dataset_params=train_ds_params,
+                seed=seed,
+            )
+    else:
+        train_ds_params = DatasetParams(
+            image_size=int(data_cfg["image_size"]),
+            random_crop=bool(data_cfg["random_crop"]),
+            horizontal_flip_prob=float(data_cfg["horizontal_flip_prob"]),
+        )
+        val_ds_params = DatasetParams(
+            image_size=int(data_cfg["image_size"]),
+            random_crop=False,
+            horizontal_flip_prob=0.0,
+        )
 
-    train_full = TurbulencePairDataset(
-        root_dir=train_root,
-        dataset_params=train_ds_params,
-        turbulence_params=turbulence_params,
-        seed=seed,
-    )
+        train_full = TurbulencePairDataset(
+            root_dir=train_root,
+            dataset_params=train_ds_params,
+            turbulence_params=turbulence_params,
+            seed=seed,
+        )
 
     if val_root_str:
         val_root = Path(val_root_str)
-        val_ds = TurbulencePairDataset(
-            root_dir=val_root,
-            dataset_params=val_ds_params,
-            turbulence_params=turbulence_params,
-            seed=seed + 1,
-        )
+        if data_mode == "sequence":
+            sequence_storage = str(data_cfg.get("sequence_storage", "folder")).lower().strip()
+            if sequence_storage == "lmdb":
+                val_ds = TurbulenceSequenceLmdbDataset(
+                    lmdb_root=val_root,
+                    dataset_params=val_ds_params,
+                    seed=seed + 1,
+                )
+            else:
+                val_ds = TurbulenceSequenceDataset(
+                    root_dir=val_root,
+                    dataset_params=val_ds_params,
+                    seed=seed + 1,
+                )
+        else:
+            val_ds = TurbulencePairDataset(
+                root_dir=val_root,
+                dataset_params=val_ds_params,
+                turbulence_params=turbulence_params,
+                seed=seed + 1,
+            )
         return train_full, val_ds
 
     n_total = len(train_full)
@@ -181,12 +245,27 @@ def build_datasets(cfg: dict[str, Any], seed: int) -> tuple[Dataset[Any], Datase
     val_idx = indices[:n_val].tolist()
     train_idx = indices[n_val : n_val + n_train].tolist()
 
-    val_full = TurbulencePairDataset(
-        root_dir=train_root,
-        dataset_params=val_ds_params,
-        turbulence_params=turbulence_params,
-        seed=seed + 1,
-    )
+    if data_mode == "sequence":
+        sequence_storage = str(data_cfg.get("sequence_storage", "folder")).lower().strip()
+        if sequence_storage == "lmdb":
+            val_full = TurbulenceSequenceLmdbDataset(
+                lmdb_root=train_root,
+                dataset_params=val_ds_params,
+                seed=seed + 1,
+            )
+        else:
+            val_full = TurbulenceSequenceDataset(
+                root_dir=train_root,
+                dataset_params=val_ds_params,
+                seed=seed + 1,
+            )
+    else:
+        val_full = TurbulencePairDataset(
+            root_dir=train_root,
+            dataset_params=val_ds_params,
+            turbulence_params=turbulence_params,
+            seed=seed + 1,
+        )
 
     train_ds = Subset(train_full, train_idx)
     val_ds = Subset(val_full, val_idx)
@@ -244,3 +323,39 @@ def save_checkpoint(state: dict[str, Any], path: Path) -> None:
     """Save checkpoint dictionary."""
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(state, path)
+
+
+def resolve_cond_channels(cfg: dict[str, Any]) -> int:
+    """Resolve degraded-input channels used by model condition branch."""
+    data_cfg = cfg.get("data", {})
+    model_cfg = cfg.get("model", {})
+    base_in = int(model_cfg.get("in_channels", 3))
+
+    data_mode = str(data_cfg.get("mode", "single")).lower().strip()
+    if data_mode != "sequence":
+        return base_in
+
+    strategy = str(data_cfg.get("sequence_input", "stack_channels")).lower().strip()
+    num_frames = max(1, int(data_cfg.get("num_frames", 1)))
+    if strategy == "stack_channels":
+        return base_in * num_frames
+    return base_in
+
+
+def adapt_degraded_for_model(degraded: torch.Tensor, cfg: dict[str, Any]) -> torch.Tensor:
+    """Adapt degraded input to 4D tensors expected by current model backbones."""
+    if degraded.ndim != 5:
+        return degraded
+
+    data_cfg = cfg.get("data", {})
+    strategy = str(data_cfg.get("sequence_input", "stack_channels")).lower().strip()
+    if strategy == "stack_channels":
+        bsz, frames, channels, height, width = degraded.shape
+        return degraded.reshape(bsz, frames * channels, height, width)
+    if strategy == "mean":
+        return degraded.mean(dim=1)
+    if strategy == "center_frame":
+        center_idx = degraded.shape[1] // 2
+        return degraded[:, center_idx, ...]
+
+    raise ValueError(f"Unsupported data.sequence_input strategy: {strategy}")

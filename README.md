@@ -402,11 +402,122 @@ python data/get_data.py --dataset uc_merced
 
 - data/raw/UCMerced_LandUse/Images
 
+### 4.6.1 构建 NWPU 多帧湍流数据集（新增）
+
+1) 准备 NWPU-RESISC45 原始图像（手动下载后放置到 `data/raw/NWPU-RESISC45`）。
+
+2) 提取干净 Patch（默认 256x256，启发式去云，目标 5 万）：
+
+```powershell
+python data/get_data.py --action extract_clean --input-root data/raw/NWPU-RESISC45 --output-root data/clean_patches/nwpu --patch-size 256 --stride 256 --max-patches 50000 --cloud-threshold 0.22 --seed 42
+```
+
+3) 生成离线 7 帧湍流序列数据（配置驱动，默认读取 `configs/default.yaml` 的 `build_sequence + degradation`）：
+
+默认配置已启用 **direct LMDB only**，即直接写入 LMDB，不再落地 `sample_xxxxxxx/frame_xxx.png`。
+另外，`build_sequence.lmdb.map_size_gb: 0` 表示自动估算映射空间，避免预分配超大 `data.mdb`。
+当前默认使用 `image_codec: png` 作为高吞吐 staging 编码，并启用 `prefetch_queue_size` 让 GPU 生产与 CPU 编码写盘并行，减少 GPU 利用率锯齿。
+另外新增 TurbSim 速度参数：
+- `degradation.turbsim_luma_only`（最快，亮度通道物理模拟）
+- `degradation.turbsim_patch_grid_downsample`（建议 2 或 3）
+- `degradation.turbsim_psf_resolution`（建议 24 或 16）
+- `degradation.turbsim_reuse_psf_per_frame`（`true` 最快）
+
+```powershell
+python -m data.get_data --action build_sequence --config configs/default.yaml
+```
+
+如果需要更激进提速，可临时覆盖参数（质量会进一步下降）：
+
+```powershell
+python -m data.get_data --action build_sequence --config configs/default.yaml --turbsim-patch-grid-downsample 3 --turbsim-psf-resolution 16 --turbsim-reuse-psf-per-frame
+```
+
+如果目标是大规模快速生成（例如 2 万样本），建议直接切换到 `simple_parametric` 后端：
+
+```powershell
+python -m data.get_data --action build_sequence --config configs/default.yaml --backend simple_parametric
+```
+
+若希望尽量保留原始色彩细节，可关闭亮度快速模式：
+
+```powershell
+python -m data.get_data --action build_sequence --config configs/default.yaml --turbsim-patch-grid-downsample 2 --turbsim-psf-resolution 24 --turbsim-reuse-psf-per-frame
+```
+
+若需要压缩体积，可在构建完成后离线转码到 WEBP（推荐）：
+
+```powershell
+python tools/transcode_lmdb_codec.py --input-lmdb data/turbulence_seq_nwpu_mild50_lmdb --output-lmdb data/turbulence_seq_nwpu_mild50_lmdb_webp --codec webp --quality 92 --map-size-gb 0
+```
+
+LMDB 输出示例：
+
+```text
+data/turbulence_seq_nwpu_ultramild_v2_lmdb/
+  data.mdb
+  lock.mdb
+```
+
+如果你想保守验证，建议在 `configs/default.yaml -> build_sequence.target_samples` 里先设为 1000 联调，再设为 `-1` 生成全量（`-1` 表示 clean pool 全量一次）。
+
+### 4.6.2 当前推荐：超温和湍流样本 direct LMDB 生成（PowerShell + Git Bash）
+
+以下命令会使用 `configs/default.yaml` 中已配置好的参数直接生成 LMDB。
+
+PowerShell：
+
+```powershell
+cd C:/Users/23826/Desktop/university/Grade1-2/DL/Project
+
+D:/Anaconda/envs/DLProject/python.exe -m data.get_data --action build_sequence --config configs/default.yaml
+Get-ChildItem data/turbulence_seq_nwpu_ultramild_v2_lmdb
+```
+
+Git Bash：
+
+```bash
+cd "/c/Users/23826/Desktop/university/Grade1-2/DL/Project"
+
+"/d/Anaconda/envs/DLProject/python.exe" -m data.get_data --action build_sequence --config configs/default.yaml
+ls -la data/turbulence_seq_nwpu_ultramild_v2_lmdb
+```
+
+### 4.6.3 兼容旧流程：将序列文件夹打包为 LMDB
+
+如果你已经有历史 `sample_*` 文件夹数据，仍可用以下命令打包成 LMDB。
+
+PowerShell：
+
+```powershell
+python tools/convert_sequence_to_lmdb.py --input-root data/turbulence_seq_nwpu_ultramild_v2 --output-root data/turbulence_seq_nwpu_ultramild_v2_lmdb --num-frames 7 --map-size-gb 200
+```
+
+Git Bash：
+
+```bash
+python tools/convert_sequence_to_lmdb.py --input-root data/turbulence_seq_nwpu_ultramild_v2 --output-root data/turbulence_seq_nwpu_ultramild_v2_lmdb --num-frames 7 --map-size-gb 200
+```
+
+训练读取 LMDB 时，将配置改为：
+
+- `data.mode: sequence`
+- `data.sequence_storage: lmdb`
+- `data.train_root: data/turbulence_seq_nwpu_ultramild_v2_lmdb`
+
 ### 4.7 开始训练（U-Net 默认配置）
 
 ```powershell
 python train_unet.py --config configs/default.yaml
 ```
+
+默认配置已切换为离线 7 帧序列 LMDB 训练。关键字段：
+
+- `data.mode: sequence`
+- `data.sequence_storage: lmdb`
+- `data.train_root: data/turbulence_seq_nwpu_ultramild_v2_lmdb`
+- `data.num_frames: 7`
+- `data.sequence_input: stack_channels`
 
 训练输出：
 

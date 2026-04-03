@@ -22,15 +22,17 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from data.dataset import DatasetParams, TurbulencePairDataset
+from data.dataset import DatasetParams, SequenceDatasetParams, TurbulencePairDataset, TurbulenceSequenceDataset
 from modules.baseline_unet import build_baseline_unet
 from modules.gan_models import build_pix2pix_models
 from modules.diffusion import ConditionalDiffusionModel, DiffusionConfig
 from modules.vae import VAEConfig, build_conditional_vae
 from train_common import (
+    adapt_degraded_for_model,
     build_turbulence_params,
     load_config,
     resolve_device,
+    resolve_cond_channels,
     set_seed,
     to_0_1,
     to_minus1_1,
@@ -79,40 +81,70 @@ def build_eval_loader(
     - split=test: must use dedicated test_root.
     """
     data_cfg = cfg["data"]
+    data_mode = str(data_cfg.get("mode", "single")).lower().strip()
     train_root = Path(data_cfg["train_root"])
     val_root_str = str(data_cfg.get("val_root", "")).strip()
     test_root_str = str(data_cfg.get("test_root", "")).strip()
 
     turbulence_params = build_turbulence_params(cfg)
-    eval_params = DatasetParams(
-        image_size=int(data_cfg["image_size"]),
-        random_crop=False,
-        horizontal_flip_prob=0.0,
-    )
+    if data_mode == "sequence":
+        eval_params: DatasetParams | SequenceDatasetParams = SequenceDatasetParams(
+            image_size=int(data_cfg["image_size"]),
+            num_frames=int(data_cfg.get("num_frames", 7)),
+            random_crop=False,
+            horizontal_flip_prob=0.0,
+        )
+    else:
+        eval_params = DatasetParams(
+            image_size=int(data_cfg["image_size"]),
+            random_crop=False,
+            horizontal_flip_prob=0.0,
+        )
 
     if split == "test":
         if not test_root_str:
             raise RuntimeError("split=test requires data.test_root in config.")
-        eval_ds: Any = TurbulencePairDataset(
-            root_dir=Path(test_root_str),
-            dataset_params=eval_params,
-            turbulence_params=turbulence_params,
-            seed=seed + 1,
-        )
+        if data_mode == "sequence":
+            eval_ds = TurbulenceSequenceDataset(
+                root_dir=Path(test_root_str),
+                dataset_params=eval_params,
+                seed=seed + 1,
+            )
+        else:
+            eval_ds = TurbulencePairDataset(
+                root_dir=Path(test_root_str),
+                dataset_params=eval_params,
+                turbulence_params=turbulence_params,
+                seed=seed + 1,
+            )
     elif split == "val" and val_root_str:
-        eval_ds = TurbulencePairDataset(
-            root_dir=Path(val_root_str),
-            dataset_params=eval_params,
-            turbulence_params=turbulence_params,
-            seed=seed + 1,
-        )
+        if data_mode == "sequence":
+            eval_ds = TurbulenceSequenceDataset(
+                root_dir=Path(val_root_str),
+                dataset_params=eval_params,
+                seed=seed + 1,
+            )
+        else:
+            eval_ds = TurbulencePairDataset(
+                root_dir=Path(val_root_str),
+                dataset_params=eval_params,
+                turbulence_params=turbulence_params,
+                seed=seed + 1,
+            )
     elif split == "val":
-        full_ds = TurbulencePairDataset(
-            root_dir=train_root,
-            dataset_params=eval_params,
-            turbulence_params=turbulence_params,
-            seed=seed + 1,
-        )
+        if data_mode == "sequence":
+            full_ds = TurbulenceSequenceDataset(
+                root_dir=train_root,
+                dataset_params=eval_params,
+                seed=seed + 1,
+            )
+        else:
+            full_ds = TurbulencePairDataset(
+                root_dir=train_root,
+                dataset_params=eval_params,
+                turbulence_params=turbulence_params,
+                seed=seed + 1,
+            )
         n_total = len(full_ds)
         if n_total < 2:
             raise RuntimeError("Need at least 2 images for validation split.")
@@ -196,6 +228,7 @@ def main() -> None:
         print(f"[WARN] LPIPS disabled at runtime: {metric_computer.lpips.error_message}")
 
     model_cfg = cfg["model"]
+    cond_channels = resolve_cond_channels(cfg)
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -205,7 +238,7 @@ def main() -> None:
 
     if model_type == "unet":
         model = build_baseline_unet(
-            in_channels=int(model_cfg.get("in_channels", 3)),
+            in_channels=cond_channels,
             out_channels=int(model_cfg.get("out_channels", 3)),
             base_channels=int(model_cfg.get("base_channels", 64)),
         ).to(device)
@@ -220,8 +253,9 @@ def main() -> None:
             for batch_idx, (degraded, clear) in enumerate(loader):
                 degraded = degraded.to(device, non_blocking=True)
                 clear = clear.to(device, non_blocking=True)
+                degraded_model = adapt_degraded_for_model(degraded=degraded, cfg=cfg)
 
-                pred = model(degraded).clamp(0.0, 1.0)
+                pred = model(degraded_model).clamp(0.0, 1.0)
                 batch_metrics = metric_computer.compute_batch(pred=pred, target=clear)
 
                 for k, v in batch_metrics.items():
@@ -231,7 +265,7 @@ def main() -> None:
                 if args.save_images and saved_count < args.max_save:
                     can_save = min(int(args.max_save - saved_count), pred.shape[0])
                     saved_count += save_batch_triplets(
-                        degraded_batch=degraded.detach().cpu(),
+                        degraded_batch=(degraded_model[:, :3, ...]).detach().cpu(),
                         target_batch=clear.detach().cpu(),
                         pred_batch=pred.detach().cpu(),
                         out_dir=out_dir / "samples",
@@ -242,7 +276,7 @@ def main() -> None:
 
     elif model_type == "gan":
         generator, _discriminator = build_pix2pix_models(
-            in_channels=int(model_cfg.get("in_channels", 3)),
+            in_channels=cond_channels,
             out_channels=int(model_cfg.get("out_channels", 3)),
             base_channels=int(model_cfg.get("base_channels", 64)),
         )
@@ -258,8 +292,9 @@ def main() -> None:
             for batch_idx, (degraded, clear) in enumerate(loader):
                 degraded = degraded.to(device, non_blocking=True)
                 clear = clear.to(device, non_blocking=True)
+                degraded_model = adapt_degraded_for_model(degraded=degraded, cfg=cfg)
 
-                pred_n = generator(to_minus1_1(degraded))
+                pred_n = generator(to_minus1_1(degraded_model))
                 pred = to_0_1(pred_n)
                 batch_metrics = metric_computer.compute_batch(pred=pred, target=clear)
 
@@ -270,7 +305,7 @@ def main() -> None:
                 if args.save_images and saved_count < args.max_save:
                     can_save = min(int(args.max_save - saved_count), pred.shape[0])
                     saved_count += save_batch_triplets(
-                        degraded_batch=degraded.detach().cpu(),
+                        degraded_batch=(degraded_model[:, :3, ...]).detach().cpu(),
                         target_batch=clear.detach().cpu(),
                         pred_batch=pred.detach().cpu(),
                         out_dir=out_dir / "samples",
@@ -283,8 +318,8 @@ def main() -> None:
         # Build diffusion configuration
         diffusion_cfg = model_cfg.get("diffusion", {})
         diff_config = DiffusionConfig(
-            image_channels=int(model_cfg.get("in_channels", 3)),
-            cond_channels=int(model_cfg.get("in_channels", 3)),
+            image_channels=int(model_cfg.get("out_channels", 3)),
+            cond_channels=cond_channels,
             base_channels=int(model_cfg.get("base_channels", 64)),
             timesteps=int(diffusion_cfg.get("timesteps", 1000)),
             beta_start=float(diffusion_cfg.get("beta_start", 1e-4)),
@@ -306,8 +341,9 @@ def main() -> None:
             for batch_idx, (degraded, clear) in enumerate(loader):
                 degraded = degraded.to(device, non_blocking=True)
                 clear = clear.to(device, non_blocking=True)
+                degraded_model = adapt_degraded_for_model(degraded=degraded, cfg=cfg)
 
-                degraded_n = to_minus1_1(degraded)
+                degraded_n = to_minus1_1(degraded_model)
                 pred_n = model.sample_ddim(cond=degraded_n, steps=ddim_steps)
                 pred = to_0_1(pred_n)
 
@@ -320,7 +356,7 @@ def main() -> None:
                 if args.save_images and saved_count < args.max_save:
                     can_save = min(int(args.max_save - saved_count), pred.shape[0])
                     saved_count += save_batch_triplets(
-                        degraded_batch=degraded.detach().cpu(),
+                        degraded_batch=(degraded_model[:, :3, ...]).detach().cpu(),
                         target_batch=clear.detach().cpu(),
                         pred_batch=pred.detach().cpu(),
                         out_dir=out_dir / "samples",
@@ -332,9 +368,9 @@ def main() -> None:
     elif model_type == "vae":
         vae_cfg = model_cfg.get("vae", {})
         vae_config = VAEConfig(
-            in_channels=int(model_cfg.get("in_channels", 3)),
+            in_channels=int(model_cfg.get("out_channels", 3)),
             out_channels=int(model_cfg.get("out_channels", 3)),
-            cond_channels=int(model_cfg.get("in_channels", 3)),
+            cond_channels=cond_channels,
             base_channels=int(model_cfg.get("base_channels", 64)),
             latent_channels=int(vae_cfg.get("latent_channels", 128)),
         )
@@ -350,8 +386,9 @@ def main() -> None:
             for batch_idx, (degraded, clear) in enumerate(loader):
                 degraded = degraded.to(device, non_blocking=True)
                 clear = clear.to(device, non_blocking=True)
+                degraded_model = adapt_degraded_for_model(degraded=degraded, cfg=cfg)
 
-                pred = model.reconstruct(degraded).clamp(0.0, 1.0)
+                pred = model.reconstruct(degraded_model).clamp(0.0, 1.0)
                 batch_metrics = metric_computer.compute_batch(pred=pred, target=clear)
 
                 for k, v in batch_metrics.items():
@@ -361,7 +398,7 @@ def main() -> None:
                 if args.save_images and saved_count < args.max_save:
                     can_save = min(int(args.max_save - saved_count), pred.shape[0])
                     saved_count += save_batch_triplets(
-                        degraded_batch=degraded.detach().cpu(),
+                        degraded_batch=(degraded_model[:, :3, ...]).detach().cpu(),
                         target_batch=clear.detach().cpu(),
                         pred_batch=pred.detach().cpu(),
                         out_dir=out_dir / "samples",

@@ -15,11 +15,13 @@ from tqdm.auto import tqdm
 
 from modules.diffusion import ConditionalDiffusionModel, DiffusionConfig
 from train_common import (
+    adapt_degraded_for_model,
     build_dataloaders,
     compute_mean_stats,
     load_config,
     parse_train_args,
     resolve_device,
+    resolve_cond_channels,
     save_checkpoint,
     set_seed,
     to_0_1,
@@ -52,6 +54,7 @@ def train_one_epoch_diffusion(
     metric_on_log: bool,
     ddim_steps: int,
     use_tqdm: bool,
+    cfg_for_adapt: dict[str, object],
 ) -> dict[str, float]:
     model.train()
     use_amp = amp_enabled and device.type == "cuda"
@@ -64,8 +67,9 @@ def train_one_epoch_diffusion(
     for step, (degraded, clear) in enumerate(pbar, start=1):
         degraded = degraded.to(device, non_blocking=True)
         clear = clear.to(device, non_blocking=True)
+        degraded_model = adapt_degraded_for_model(degraded=degraded, cfg=cfg_for_adapt)
 
-        degraded_n = to_minus1_1(degraded)
+        degraded_n = to_minus1_1(degraded_model)
         clear_n = to_minus1_1(clear)
 
         should_log = log_interval > 0 and (step % log_interval == 0 or step == len(loader))
@@ -132,6 +136,7 @@ def evaluate_diffusion(
     metrics: RestorationMetrics,
     device: torch.device,
     ddim_steps: int,
+    cfg_for_adapt: dict[str, object],
 ) -> dict[str, float]:
     model.eval()
 
@@ -141,8 +146,9 @@ def evaluate_diffusion(
     for degraded, clear in loader:
         degraded = degraded.to(device, non_blocking=True)
         clear = clear.to(device, non_blocking=True)
+        degraded_model = adapt_degraded_for_model(degraded=degraded, cfg=cfg_for_adapt)
 
-        degraded_n = to_minus1_1(degraded)
+        degraded_n = to_minus1_1(degraded_model)
         pred_n = model.sample_ddim(cond=degraded_n, steps=ddim_steps)
         pred_01 = to_0_1(pred_n)
 
@@ -187,9 +193,10 @@ def main() -> None:
 
     model_cfg = cfg["model"]
     diffusion_cfg = model_cfg.get("diffusion", {})
+    cond_channels = resolve_cond_channels(cfg)
     diff_config = DiffusionConfig(
-        image_channels=int(model_cfg.get("in_channels", 3)),
-        cond_channels=int(model_cfg.get("in_channels", 3)),
+        image_channels=int(model_cfg.get("out_channels", 3)),
+        cond_channels=cond_channels,
         base_channels=int(model_cfg.get("base_channels", 64)),
         timesteps=int(diffusion_cfg.get("timesteps", 1000)),
         beta_start=float(diffusion_cfg.get("beta_start", 1e-4)),
@@ -255,6 +262,7 @@ def main() -> None:
             metric_on_log=train_metric_on_log,
             ddim_steps=ddim_steps,
             use_tqdm=use_tqdm,
+            cfg_for_adapt=cfg,
         )
 
         if scheduler is not None:
@@ -269,6 +277,7 @@ def main() -> None:
                 metrics=metric_computer,
                 device=device,
                 ddim_steps=ddim_steps,
+                cfg_for_adapt=cfg,
             )
             print(f"[Epoch {epoch}] val={val_stats}")
 

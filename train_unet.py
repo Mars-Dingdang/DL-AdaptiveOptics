@@ -16,11 +16,13 @@ from tqdm.auto import tqdm
 
 from modules.baseline_unet import build_baseline_unet
 from train_common import (
+    adapt_degraded_for_model,
     build_dataloaders,
     compute_mean_stats,
     load_config,
     parse_train_args,
     resolve_device,
+    resolve_cond_channels,
     save_checkpoint,
     set_seed,
     validate_data_protocol,
@@ -50,6 +52,7 @@ def train_one_epoch_unet(
     metric_interval: int,
     metric_on_log: bool,
     use_tqdm: bool,
+    cfg_for_adapt: dict[str, object],
 ) -> dict[str, float]:
     model.train()
     use_amp = amp_enabled and device.type == "cuda"
@@ -67,7 +70,7 @@ def train_one_epoch_unet(
         compute_metrics_now = (metric_on_log and should_log) or (metric_interval > 0 and step % metric_interval == 0)
 
         with autocast(enabled=use_amp):
-            pred = model(degraded)
+            pred = model(adapt_degraded_for_model(degraded=degraded, cfg=cfg_for_adapt))
             pred_01 = pred.clamp(0.0, 1.0)
             loss = criterion(pred_01, clear)
 
@@ -120,6 +123,7 @@ def evaluate_unet(
     criterion: nn.Module,
     metrics: RestorationMetrics,
     device: torch.device,
+    cfg_for_adapt: dict[str, object],
 ) -> dict[str, float]:
     model.eval()
     sum_stats: dict[str, float] = defaultdict(float)
@@ -129,7 +133,7 @@ def evaluate_unet(
         degraded = degraded.to(device, non_blocking=True)
         clear = clear.to(device, non_blocking=True)
 
-        pred = model(degraded)
+        pred = model(adapt_degraded_for_model(degraded=degraded, cfg=cfg_for_adapt))
         pred_01 = pred.clamp(0.0, 1.0)
         loss = criterion(pred_01, clear)
         batch_metrics = metrics.compute_batch(pred=pred_01, target=clear)
@@ -172,9 +176,10 @@ def main() -> None:
         device=device,
     )
 
+    cond_channels = resolve_cond_channels(cfg)
     model_cfg = cfg["model"]
     model = build_baseline_unet(
-        in_channels=int(model_cfg.get("in_channels", 3)),
+        in_channels=cond_channels,
         out_channels=int(model_cfg.get("out_channels", 3)),
         base_channels=int(model_cfg.get("base_channels", 64)),
     ).to(device)
@@ -231,6 +236,7 @@ def main() -> None:
             metric_interval=train_metric_interval,
             metric_on_log=train_metric_on_log,
             use_tqdm=use_tqdm,
+            cfg_for_adapt=cfg,
         )
 
         if scheduler is not None:
@@ -239,7 +245,14 @@ def main() -> None:
         print(f"[Epoch {epoch}] train={train_stats}")
 
         if val_interval > 0 and epoch % val_interval == 0:
-            val_stats = evaluate_unet(model=model, loader=val_loader, criterion=criterion, metrics=metric_computer, device=device)
+            val_stats = evaluate_unet(
+                model=model,
+                loader=val_loader,
+                criterion=criterion,
+                metrics=metric_computer,
+                device=device,
+                cfg_for_adapt=cfg,
+            )
             print(f"[Epoch {epoch}] val={val_stats}")
             metric_value = float(val_stats.get(monitor_name, -1e9))
             if metric_value > best_value:
