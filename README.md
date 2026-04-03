@@ -1,32 +1,65 @@
 # 基于生成模型的计算自适应光学
-# English Title: Computational Adaptive Optics with Generative Models
+English Title: Computational Adaptive Optics with Generative Models
 
-本项目面向课程题目：
+## 1. 项目介绍 Project Introduction
 
-- 任务：卫星遥感图像去湍流与增强（Image-to-Image Restoration）
-- 输入：受大气湍流、光学模糊、传感器噪声影响的退化图
-- 输出：恢复后的清晰图像
+本项目是 Deep Learning 2026 Spring 的 Project，旨在使用生成式模型进行被大气湍流影响的遥感图片修复。项目的整体技术路线如下：
 
-项目提供了从数据合成、模型训练、离线评估到在线 Demo 的完整流程，支持两条主线模型：
+### 数据集与退化建模：
 
-- Baseline：U-Net
-- 主模型：Pix2Pix 风格条件 GAN（带物理一致性约束）
+使用公开遥感数据集（UC Merced 2100 lines, NWPU-RESISC45 31500 lines），并使用普渡大学 TurbSim 模块 TurbulenceSim_v1 进行在线退化建模，以 LMDB 格式生成配对训练样本。*（具体实现过程中，对于 TurbulenceSim 进行了适合 GPU 的优化。）*
 
-并提供了轻量条件扩散模型骨架，便于后续加分实验。
+### U-Net
 
-> [!IMPORTANT] Git LFS Setup
-> 本项目使用 Git LFS 管理大文件（数据集 .zip 和模型参数 .pt 文件）。**所有协作者必须先安装 Git LFS 才能正确拉取和提交大文件**。
+baseline。
+
+### GAN 模型
+
+#### 1. 首推：TSR-WGAN (Time-Spatial Residual WGAN)
+*   **论文标题**：*Neutralizing the impact of atmospheric turbulence on complex scene imaging via deep learning* (Nature Machine Intelligence, 2021)
+*   **为什么推荐它**：这篇论文专门针对**复杂场景（Complex Scenes）**的大气湍流消除。相比于只输入单张图片，TSR-WGAN 接受视频流/多帧序列作为输入，利用时间（时序上的几何抖动）和空间（模糊）信息来重建图像。它的设计理念非常契合你用物理仿真生成的时序遥感数据集。
+*   **GitHub 参考地址**：[https://github.com/tsinghua-ee-jin/TSR-WGAN](https://github.com/tsinghua-ee-jin/TSR-WGAN) （作者团队开源）或通过论文名在 GitHub 搜索。
+
+#### 2. 备选：LTT-GAN (Looking Through Turbulence by Inverting GANs)
+*   **论文标题**：*LTT-GAN: Looking Through Turbulence by Inverting GANs* (IEEE JSTSP, 2023)
+*   **为什么推荐它**：这正是你的 PDF 文献综述中提到的模型（Mei and Patel, 2023）。来自约翰斯·霍普金斯大学（JHU VISION Lab，湍流处理的顶级实验室）。它通过对预训练的 GAN 进行潜在空间逆映射（Latent Inversion）来消除湍流。
+*   **GitHub 地址**：[https://github.com/JHU-VISION/LTT-GAN](https://github.com/JHU-VISION/LTT-GAN)
+
+### Diffusion 模型
+扩散模型在湍流消除中是绝对的 SOTA（当前最优），但传统 Diffusion 训练需要极大的数据量。针对你的情况，我特别推荐一个**“零样本（Zero-Shot）”**方案和一个**“物理驱动”**方案。
+
+#### 1. 首推（完美契合你的痛点）：DDNM (Denoising Diffusion Null-Space Model)
+*   **论文标题**：*Zero-Shot Image Restoration Using Denoising Diffusion Null-Space Model* (ICLR 2023)
+*   **为什么推荐它**：**强烈推荐！** 你的 PDF 综述第22页专门展示了它的效果（图6）。DDNM 最大的杀手锏是它是**零样本（Zero-Shot）**的框架，专门用于求解逆问题（Inverse Problems，如去模糊、超分）。
+    *   **解决数据少的问题**：你可以先用 2100 张清晰遥感图（不需要配对的湍流图）训练一个标准的无条件 Diffusion Model（让模型学会“干净的遥感图长什么样”）。然后在推理阶段，使用 DDNM 结合物理仿真器的退化矩阵，直接消除湍流。这完美绕开了“难以生成海量高质量配对数据”的死结！
+*   **GitHub 地址**：[https://github.com/wyhuai/DDNM](https://github.com/wyhuai/DDNM)
+
+#### 2. 备选：PDR (Physics-Driven Turbulence Image Restoration)
+*   **论文标题**：*Physics-Driven Turbulence Image Restoration with Stochastic Refinement* (ICCV 2023)
+*   **为什么推荐它**：这篇论文同样被你的 PDF 提及（Jaiswal et al., 2023）。它出自普渡大学 Stanley Chan 教授团队（大气湍流仿真的绝对权威）。这个模型**将大气湍流的物理先验（如相位畸变规律）硬编码到了 Diffusion 的去噪扩散过程中**。因为它“懂物理”，所以你用简单的物理仿真数据训练它，它也能很好地泛化到真实的遥感图像上，不容易过拟合。
+*   **GitHub 地址**：[https://github.com/VITA-Group/PDR](https://github.com/VITA-Group/PDR) (或在 GitHub 搜索论文全名，作者 Atlas Wang / Jaiswal 的主页均有开源)。
+
+## 2. GitHub 仓库使用说明
+
+
+> [!IMPORTANT] 
+> Git LFS Setup
+> 本项目使用 Git LFS 管理大文件（数据集 .zip 和模型参数 .pt 文件）。**所有协作者必须先安装 Git LFS 才能正确拉取和提交大文件**。对于 LMDB 文件，由于其大小甚至超过了 Git LFS 的单文件限制，我将其上传到了 Huggingface 同目录，可以直接运行 data/download.py 脚本下载。
 >
+> ```bash
+> python data/download.py
+> ```
 > **安装 Git LFS（首次使用必须执行）**：
+>
 > ```bash
 > # Linux (Ubuntu/Debian)
 > sudo apt-get install git-lfs
 > git lfs install
->
+> 
 > # macOS
 > brew install git-lfs
 > git lfs install
->
+> 
 > # Windows (使用 Git for Windows 自带的安装器，或通过 Chocolatey)
 > # 方法1：从 https://git-lfs.github.com/ 下载安装器
 > # 方法2：通过 Chocolatey
@@ -59,9 +92,11 @@
 > git lfs status    # 查看待提交的 LFS 文件
 > ```
 
-> [!IMPORTANT] Workflow
+> [!IMPORTANT] 
+> Workflow
 > **GitHub Repo**: https://github.com/Mars-Dingdang/DL-AdaptiveOptics.git
-> **Please follow this workflow since main branch is protected**:
+> **Please follow this workflow since main branch is protected (To guarantee the safety of main branch, all contributors must work in their own branches and then create Pull Request to the main branch.)** :
+>
 > ```bash
 > git clone https://github.com/Mars-Dingdang/DL-AdaptiveOptics.git
 > cd DL-AdaptiveOptics
@@ -69,13 +104,13 @@
 > git checkout main
 > git pull origin main
 > git checkout -b fix_branch_username # each time you start a new feature/experiment
->
+> 
 > git add .gitattributes  # ⚠️ 重要：先 add .gitattributes
 > git add .
 > git commit -m "Your commit message"
 > git push origin fix_branch_username
 > # on GitHub, create a PR from fix_branch_username to main, request review and merge after approval
->
+> 
 > # After PR is merged, switch back to main and pull latest
 > git checkout main
 > git pull origin main
@@ -83,8 +118,10 @@
 > # On GitHub, delete the branch fix_branch_username after merge to keep repo clean
 > ```
 
-> [!IMPORTANT] Stay Up-to-Date
+> [!IMPORTANT] 
+> Stay Up-to-Date
 > 如果你在修改自己的功能分支时遇到 main 分支有更新，最稳妥的做法如下：
+>
 > ```bash
 > # in your feature branch
 > git add .
@@ -112,96 +149,54 @@
 
 ---
 
-## 1. 技术路线概览
-
-### 1.1 退化建模（Physics-inspired Degradation）
-
-在训练时不依赖稀缺的真实配对数据，而是对清晰遥感图进行在线退化，生成配对样本：
-
-- Zernike 多项式生成相位屏（wavefront phase screen）
-- 通过傅里叶光学将相位屏转换为 PSF（点扩散函数）
-- PSF 卷积模拟光学模糊
-- 可选运动模糊
-- Poisson + Gaussian 噪声模拟传感器扰动
-- JPEG 压缩伪影模拟成像链路失真
-
-### 1.2 模型架构
-
-1) U-Net Baseline
-
-- 编码器-解码器结构
-- 跳跃连接保留细节
-- 适合作为稳定保底模型
-
-2) 条件 GAN（Pix2Pix 风格）
-
-- Generator：U-Net 风格生成器
-- Discriminator：PatchGAN 判别器
-- 目标函数包含对抗项 + 重建项 + 物理一致性项
-
-3) 条件扩散骨架
-
-- Sinusoidal 时间嵌入
-- 条件去噪网络
-- 噪声预测目标（MSE）
-- DDIM 采样接口
-
-### 1.3 训练方法
-
-1) U-Net 训练目标
-
-- 监督学习，主损失为 L1 重建损失
-
-2) GAN 训练目标
-
-- 判别器损失：BCE(real/fake)
-- 生成器损失：
-  - 对抗损失
-  - L1 重建损失
-  - 退化一致性损失（将生成图做前向退化后，应逼近输入退化图）
-
-3) Diffusion 训练目标
-
-- 噪声预测损失：预测每个时间步添加的噪声（MSE）
-- 采样方法：DDIM 确定性采样
-- 支持自定义时间步数和随机性参数
-
-4) 评估指标
-
-- PSNR
-- SSIM
-- LPIPS（可选）
-
----
-
-## 2. 项目文件树
+## 3. 项目文件树 Project File Tree
 
 ```text
 Project/
 ├─ README.md
+├─ AOReview.pdf
 ├─ initial_plan.md
 ├─ initial_prompt.md
 ├─ requirements.txt
 ├─ train.py
+├─ train_common.py
+├─ train_unet.py
+├─ train_gan.py
+├─ train_vae.py
+├─ train_diffusion.py
 ├─ eval.py
 ├─ configs/
 │  └─ default.yaml
 ├─ data/
 │  ├─ __init__.py
+│  ├─ dataset.py
+│  ├─ download.py
 │  ├─ get_data.py
-│  └─ dataset.py
+│  ├─ raw/
+│  ├─ clean_patches/
+│  │  ├─ nwpu_parquet/
+│  │  ├─ NWPU-RESISC45/
+│  │  └─ ucm/
+│  ├─ turbulence_seq_nwpu_mild50_lmdb/
+│  └─ turbulence_seq_nwpu_mild50_test/
 ├─ modules/
 │  ├─ __init__.py
 │  ├─ baseline_unet.py
+│  ├─ diffusion.py
 │  ├─ gan_models.py
-│  └─ diffusion.py
+│  └─ vae.py
 ├─ utils/
 │  ├─ __init__.py
+│  ├─ convert_sequence_to_lmdb.py
 │  ├─ degradation.py
+│  ├─ export_sequence_gifs.py
 │  ├─ metrics.py
-│  └─ visualization.py
+│  ├─ transcode_lmdb_codec.py
+│  ├─ visualization.py
+│  ├─ TurbulenceSim/
+│  └─ TurbulenceSimGPU/
 └─ demo/
-   └─ app.py
+  └─ app.py
 ```
 
 ---
@@ -448,7 +443,7 @@ python -m data.get_data --action build_sequence --config configs/default.yaml --
 若需要压缩体积，可在构建完成后离线转码到 WEBP（推荐）：
 
 ```powershell
-python tools/transcode_lmdb_codec.py --input-lmdb data/turbulence_seq_nwpu_mild50_lmdb --output-lmdb data/turbulence_seq_nwpu_mild50_lmdb_webp --codec webp --quality 92 --map-size-gb 0
+python utils/transcode_lmdb_codec.py --input-lmdb data/turbulence_seq_nwpu_mild50_lmdb --output-lmdb data/turbulence_seq_nwpu_mild50_lmdb_webp --codec webp --quality 92 --map-size-gb 0
 ```
 
 LMDB 输出示例：
@@ -490,13 +485,13 @@ ls -la data/turbulence_seq_nwpu_ultramild_v2_lmdb
 PowerShell：
 
 ```powershell
-python tools/convert_sequence_to_lmdb.py --input-root data/turbulence_seq_nwpu_ultramild_v2 --output-root data/turbulence_seq_nwpu_ultramild_v2_lmdb --num-frames 7 --map-size-gb 200
+python utils/convert_sequence_to_lmdb.py --input-root data/turbulence_seq_nwpu_ultramild_v2 --output-root data/turbulence_seq_nwpu_ultramild_v2_lmdb --num-frames 7 --map-size-gb 200
 ```
 
 Git Bash：
 
 ```bash
-python tools/convert_sequence_to_lmdb.py --input-root data/turbulence_seq_nwpu_ultramild_v2 --output-root data/turbulence_seq_nwpu_ultramild_v2_lmdb --num-frames 7 --map-size-gb 200
+python utils/convert_sequence_to_lmdb.py --input-root data/turbulence_seq_nwpu_ultramild_v2 --output-root data/turbulence_seq_nwpu_ultramild_v2_lmdb --num-frames 7 --map-size-gb 200
 ```
 
 训练读取 LMDB 时，将配置改为：
