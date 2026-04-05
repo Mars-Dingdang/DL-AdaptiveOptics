@@ -21,11 +21,13 @@ from modules.gan_models import (
     generator_total_loss,
 )
 from train_common import (
+    adapt_degraded_for_model,
     build_dataloaders,
     compute_mean_stats,
     load_config,
     parse_train_args,
     resolve_device,
+    resolve_cond_channels,
     save_checkpoint,
     set_seed,
     to_0_1,
@@ -66,6 +68,7 @@ def train_one_epoch_gan(
     d_steps_per_g: int,
     real_label_smooth: float,
     use_tqdm: bool,
+    cfg_for_adapt: dict[str, object],
 ) -> dict[str, float]:
     generator.train()
     discriminator.train()
@@ -79,8 +82,9 @@ def train_one_epoch_gan(
     for step, (degraded, clear) in enumerate(pbar, start=1):
         degraded = degraded.to(device, non_blocking=True)
         clear = clear.to(device, non_blocking=True)
+        degraded_model = adapt_degraded_for_model(degraded=degraded, cfg=cfg_for_adapt)
 
-        degraded_n = to_minus1_1(degraded)
+        degraded_n = to_minus1_1(degraded_model)
         clear_n = to_minus1_1(clear)
 
         should_log = log_interval > 0 and (step % log_interval == 0 or step == len(loader))
@@ -201,6 +205,7 @@ def evaluate_gan(
     gan_weights: GANLossWeights,
     metrics: RestorationMetrics,
     device: torch.device,
+    cfg_for_adapt: dict[str, object],
 ) -> dict[str, float]:
     generator.eval()
     discriminator.eval()
@@ -211,8 +216,9 @@ def evaluate_gan(
     for degraded, clear in loader:
         degraded = degraded.to(device, non_blocking=True)
         clear = clear.to(device, non_blocking=True)
+        degraded_model = adapt_degraded_for_model(degraded=degraded, cfg=cfg_for_adapt)
 
-        degraded_n = to_minus1_1(degraded)
+        degraded_n = to_minus1_1(degraded_model)
         clear_n = to_minus1_1(clear)
 
         fake_clear = generator(degraded_n)
@@ -274,8 +280,9 @@ def main() -> None:
     )
 
     model_cfg = cfg["model"]
+    cond_channels = resolve_cond_channels(cfg)
     generator, discriminator = build_pix2pix_models(
-        in_channels=int(model_cfg.get("in_channels", 3)),
+        in_channels=cond_channels,
         out_channels=int(model_cfg.get("out_channels", 3)),
         base_channels=int(model_cfg.get("base_channels", 64)),
     )
@@ -356,6 +363,7 @@ def main() -> None:
             d_steps_per_g=d_steps_per_g,
             real_label_smooth=real_label_smooth,
             use_tqdm=use_tqdm,
+            cfg_for_adapt=cfg,
         )
 
         if scheduler_g is not None:
@@ -373,6 +381,7 @@ def main() -> None:
                 gan_weights=gan_weights,
                 metrics=metric_computer,
                 device=device,
+                cfg_for_adapt=cfg,
             )
             print(f"[Epoch {epoch}] val={val_stats}")
 

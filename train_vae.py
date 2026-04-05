@@ -16,11 +16,13 @@ from tqdm.auto import tqdm
 
 from modules.vae import VAEConfig, build_conditional_vae, kl_divergence
 from train_common import (
+    adapt_degraded_for_model,
     build_dataloaders,
     compute_mean_stats,
     load_config,
     parse_train_args,
     resolve_device,
+    resolve_cond_channels,
     save_checkpoint,
     set_seed,
     validate_data_protocol,
@@ -51,6 +53,7 @@ def train_one_epoch_vae(
     metric_on_log: bool,
     kl_weight: float,
     use_tqdm: bool,
+    cfg_for_adapt: dict[str, object],
 ) -> dict[str, float]:
     model.train()
     use_amp = amp_enabled and device.type == "cuda"
@@ -63,12 +66,13 @@ def train_one_epoch_vae(
     for step, (degraded, clear) in enumerate(pbar, start=1):
         degraded = degraded.to(device, non_blocking=True)
         clear = clear.to(device, non_blocking=True)
+        degraded_model = adapt_degraded_for_model(degraded=degraded, cfg=cfg_for_adapt)
 
         should_log = log_interval > 0 and (step % log_interval == 0 or step == len(loader))
         compute_metrics_now = (metric_on_log and should_log) or (metric_interval > 0 and step % metric_interval == 0)
 
         with autocast(enabled=use_amp):
-            recon, mu, logvar = model(degraded=degraded, clear=clear)
+            recon, mu, logvar = model(degraded=degraded_model, clear=clear)
             recon_01 = recon.clamp(0.0, 1.0)
             loss_recon = recon_criterion(recon_01, clear)
             loss_kl = kl_divergence(mu=mu, logvar=logvar)
@@ -137,6 +141,7 @@ def evaluate_vae(
     metrics: RestorationMetrics,
     device: torch.device,
     kl_weight: float,
+    cfg_for_adapt: dict[str, object],
 ) -> dict[str, float]:
     model.eval()
 
@@ -146,8 +151,9 @@ def evaluate_vae(
     for degraded, clear in loader:
         degraded = degraded.to(device, non_blocking=True)
         clear = clear.to(device, non_blocking=True)
+        degraded_model = adapt_degraded_for_model(degraded=degraded, cfg=cfg_for_adapt)
 
-        recon, mu, logvar = model(degraded=degraded, clear=clear)
+        recon, mu, logvar = model(degraded=degraded_model, clear=clear)
         recon_01 = recon.clamp(0.0, 1.0)
         loss_recon = recon_criterion(recon_01, clear)
         loss_kl = kl_divergence(mu=mu, logvar=logvar)
@@ -197,10 +203,11 @@ def main() -> None:
 
     model_cfg = cfg["model"]
     vae_cfg = model_cfg.get("vae", {})
+    cond_channels = resolve_cond_channels(cfg)
     vae_config = VAEConfig(
-        in_channels=int(model_cfg.get("in_channels", 3)),
+        in_channels=int(model_cfg.get("out_channels", 3)),
         out_channels=int(model_cfg.get("out_channels", 3)),
-        cond_channels=int(model_cfg.get("in_channels", 3)),
+        cond_channels=cond_channels,
         base_channels=int(model_cfg.get("base_channels", 64)),
         latent_channels=int(vae_cfg.get("latent_channels", 128)),
     )
@@ -267,6 +274,7 @@ def main() -> None:
             metric_on_log=train_metric_on_log,
             kl_weight=current_kl_weight,
             use_tqdm=use_tqdm,
+            cfg_for_adapt=cfg,
         )
 
         if scheduler is not None:
@@ -282,6 +290,7 @@ def main() -> None:
                 metrics=metric_computer,
                 device=device,
                 kl_weight=current_kl_weight,
+                cfg_for_adapt=cfg,
             )
             print(f"[Epoch {epoch}] val={val_stats}")
             metric_value = float(val_stats.get(monitor_name, -1e9))

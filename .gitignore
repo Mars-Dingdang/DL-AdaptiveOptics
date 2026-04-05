@@ -4,3 +4,6 @@
 *.pyo
 *.pyd
 /data/raw/UCMerced_LandUse
+/data/clean_patches
+/data/turbulence_seq_nwpu_mild50_lmdb
+*.mdb

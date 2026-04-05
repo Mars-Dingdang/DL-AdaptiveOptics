@@ -9,11 +9,15 @@ runtime:
   amp: true
 
 data:
-  train_root: data/raw/UCMerced_LandUse/Images
+  mode: sequence  # single | sequence
+  sequence_storage: lmdb  # folder | lmdb
+  train_root: data/turbulence_seq_nwpu_ultramild_v2_lmdb
   val_root: ""  # optional; if empty, split from train_root by val_ratio
   test_root: ""  # required for final reporting; keep this independent from train/val
   val_ratio: 0.1
   image_size: 256
+  num_frames: 7
+  sequence_input: stack_channels  # stack_channels | center_frame | mean
   random_crop: true
   horizontal_flip_prob: 0.5
   batch_size: 64
@@ -24,15 +28,48 @@ data:
   prefetch_factor: 4
 
 degradation:
+  backend: turbsim_gpu_v1 # turbsim_gpu_v1 | turbsim_cpu_v1 | simple_parametric
   zernike_order: 6
-  phase_strength: 1.5
-  psf_kernel_size: 31
+  phase_strength: 0.12
+  psf_kernel_size: 5
   gaussian_sigma_range: [0.3, 1.2]
   motion_blur_prob: 0.25
   motion_blur_kernel_range: [7, 17]
   poisson_scale_range: [40.0, 120.0]
   gaussian_noise_std_range: [0.003, 0.02]
   jpeg_quality_range: [70, 98]
+  cn2_range: [1.0e-16, 5.0e-15]
+  focal_length_range: [6000.0, 18000.0]
+  wind_speed_range: [0.5, 2.0]
+  sequence_time_step: 0.03
+  aperture_diameter: 0.2
+  wavelength: 5.25e-7
+  object_size: 2.06
+  turbulence_strength: 0.5
+  turbsim_luma_only: true            # fastest mode: physics on luminance channel only
+  turbsim_patch_grid_downsample: 2   # >1 reduces blur patch count and speeds up generation
+  turbsim_psf_resolution: 24         # lower than 32 is faster with slight fidelity loss
+  turbsim_reuse_psf_per_frame: true  # fastest mode: reuse one PSF inside each frame
+
+build_sequence:
+  data_root: data
+  input_root: data/clean_patches/nwpu_parquet/images
+  output_root: data/turbulence_seq_nwpu_mild50
+  target_samples: 2000  # <=0 means full clean pool once
+  sample_start_index: 0
+  num_frames: 7
+  seed: 2029
+  gif:
+    duration_ms: 220
+    loop: 0
+    optimize: true
+  lmdb:
+    only: true
+    output_root: data/turbulence_seq_nwpu_mild50_lmdb
+    map_size_gb: 0  # 0 means auto-estimate to avoid oversized pre-allocation
+    image_codec: png  # high-throughput staging codec; transcode to webp offline if needed
+    image_quality: 92
+    prefetch_queue_size: 8  # overlap GPU simulation producer with CPU encode/write consumer
 
 model:
   type: unet  # unet | gan | diffusion | vae
