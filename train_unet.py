@@ -1,4 +1,10 @@
-"""Standalone U-Net training entrypoint for turbulence restoration."""
+"""Standalone U-Net training entrypoint for turbulence restoration.
+
+Supports both single-GPU launch (``python train_unet.py``) and multi-GPU
+DDP launch via ``torchrun --nproc_per_node=N train_unet.py``. Per-rank
+batch_size in the YAML config is preserved; effective global batch size
+becomes ``batch_size * world_size`` under DDP.
+"""
 
 from __future__ import annotations
 
@@ -7,20 +13,28 @@ from pathlib import Path
 import copy
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 from torch.cuda.amp import GradScaler, autocast
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 
 from modules.baseline_unet import build_baseline_unet
 from train_common import (
     adapt_degraded_for_model,
     build_dataloaders,
+    cleanup_distributed,
     compute_mean_stats,
+    init_distributed_mode,
+    is_main_process,
     load_config,
     parse_train_args,
+    reduce_dict,
+    reduce_sum_count,
     resolve_device,
     resolve_cond_channels,
     save_checkpoint,
@@ -31,6 +45,8 @@ from utils.metrics import RestorationMetrics
 
 
 def _safe_log(message: str, use_tqdm: bool) -> None:
+    if not is_main_process():
+        return
     if use_tqdm:
         tqdm.write(message)
     else:
@@ -124,6 +140,7 @@ def evaluate_unet(
     metrics: RestorationMetrics,
     device: torch.device,
     cfg_for_adapt: dict[str, object],
+    distributed: bool = False,
 ) -> dict[str, float]:
     model.eval()
     sum_stats: dict[str, float] = defaultdict(float)
@@ -143,31 +160,61 @@ def evaluate_unet(
             sum_stats[k] += float(v)
         n_batches += 1
 
+    if distributed:
+        reduced_sums, reduced_count = reduce_sum_count(dict(sum_stats), n_batches)
+        return compute_mean_stats(reduced_sums, reduced_count)
     return compute_mean_stats(sum_stats, n_batches)
 
 
 def main() -> None:
     args = parse_train_args("Train U-Net model for atmospheric turbulence removal.")
     cfg = load_config(args.config)
-    validate_data_protocol(cfg)
+
+    distributed, rank, world_size, local_rank = init_distributed_mode()
+
+    try:
+        _run(cfg=cfg, distributed=distributed, rank=rank, world_size=world_size, local_rank=local_rank)
+    finally:
+        cleanup_distributed()
+
+
+def _run(
+    cfg: dict[str, object],
+    distributed: bool,
+    rank: int,
+    world_size: int,
+    local_rank: int,
+) -> None:
+    if is_main_process():
+        validate_data_protocol(cfg)
 
     seed = int(cfg.get("seed", 42))
-    set_seed(seed)
+    set_seed(seed, rank=rank)
 
     runtime_cfg = cfg.get("runtime", {})
-    device = resolve_device(str(runtime_cfg.get("device", "auto")))
+    device = resolve_device(str(runtime_cfg.get("device", "auto")), local_rank=local_rank)
     amp_requested = bool(runtime_cfg.get("amp", False))
     amp_enabled = amp_requested and device.type == "cuda"
-    if amp_requested and not amp_enabled:
+    if amp_requested and not amp_enabled and is_main_process():
         print("[WARN] AMP requested but CUDA is unavailable. AMP is disabled.")
-    print(f"[INFO] Using device: {device}")
-    print(f"[INFO] AMP enabled: {amp_enabled}")
+    if is_main_process():
+        if distributed:
+            print(f"[INFO] Distributed training: world_size={world_size}, rank={rank}, local_rank={local_rank}")
+        print(f"[INFO] Using device: {device}")
+        print(f"[INFO] AMP enabled: {amp_enabled}")
 
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
 
-    train_loader, val_loader = build_dataloaders(cfg=cfg, seed=seed)
-    print(f"[INFO] train batches={len(train_loader)}, val batches={len(val_loader)}")
+    train_loader, val_loader = build_dataloaders(
+        cfg=cfg,
+        seed=seed,
+        distributed=distributed,
+        rank=rank,
+        world_size=world_size,
+    )
+    if is_main_process():
+        print(f"[INFO] train batches/rank={len(train_loader)}, val batches/rank={len(val_loader)}")
 
     metrics_cfg = cfg["metrics"]
     metric_computer = RestorationMetrics(
@@ -184,6 +231,18 @@ def main() -> None:
         base_channels=int(model_cfg.get("base_channels", 64)),
     ).to(device)
 
+    if distributed:
+        model = DDP(
+            model,
+            device_ids=[local_rank] if device.type == "cuda" else None,
+            output_device=local_rank if device.type == "cuda" else None,
+            find_unused_parameters=False,
+        )
+
+    # Helper to access the underlying module for state_dict / parameter access.
+    def _unwrap(m: nn.Module) -> nn.Module:
+        return m.module if isinstance(m, DDP) else m
+
     opt_cfg = cfg["optimizer"]
     lr = float(opt_cfg["learning_rate"])
     betas = (float(opt_cfg["beta1"]), float(opt_cfg["beta2"]))
@@ -197,7 +256,8 @@ def main() -> None:
     max_grad_norm = float(train_cfg.get("max_grad_norm", 0.0))
     train_metric_interval = max(0, int(train_cfg.get("train_metric_interval", 0)))
     train_metric_on_log = bool(train_cfg.get("train_metric_on_log", True))
-    use_tqdm = bool(train_cfg.get("tqdm", True))
+    use_tqdm_cfg = bool(train_cfg.get("tqdm", True))
+    use_tqdm = use_tqdm_cfg and is_main_process()
     fast_train = bool(train_cfg.get("fast_train", False))
 
     if fast_train:
@@ -206,7 +266,8 @@ def main() -> None:
 
     ckpt_cfg = cfg["checkpoint"]
     ckpt_dir = Path(ckpt_cfg.get("dir", "checkpoints"))
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    if is_main_process():
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
     monitor_name = str(ckpt_cfg.get("monitor", "psnr"))
     best_value = -1e9
 
@@ -221,6 +282,9 @@ def main() -> None:
     scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma) if use_scheduler else None
 
     for epoch in range(1, epochs + 1):
+        if distributed and isinstance(train_loader.sampler, DistributedSampler):
+            train_loader.sampler.set_epoch(epoch)
+
         train_stats = train_one_epoch_unet(
             model=model,
             loader=train_loader,
@@ -242,7 +306,11 @@ def main() -> None:
         if scheduler is not None:
             scheduler.step()
 
-        print(f"[Epoch {epoch}] train={train_stats}")
+        if distributed:
+            train_stats = reduce_dict(train_stats, world_size=world_size)
+
+        if is_main_process():
+            print(f"[Epoch {epoch}] train={train_stats}")
 
         if val_interval > 0 and epoch % val_interval == 0:
             val_stats = evaluate_unet(
@@ -252,41 +320,49 @@ def main() -> None:
                 metrics=metric_computer,
                 device=device,
                 cfg_for_adapt=cfg,
+                distributed=distributed,
             )
-            print(f"[Epoch {epoch}] val={val_stats}")
+            if is_main_process():
+                print(f"[Epoch {epoch}] val={val_stats}")
             metric_value = float(val_stats.get(monitor_name, -1e9))
             if metric_value > best_value:
                 best_value = metric_value
-                best_path = ckpt_dir / "best_unet.pt"
+                if is_main_process():
+                    best_path = ckpt_dir / "best_unet.pt"
+                    save_checkpoint(
+                        {
+                            "epoch": epoch,
+                            "model_type": "unet",
+                            "config": copy.deepcopy(cfg),
+                            "model_state": _unwrap(model).state_dict(),
+                            "optimizer_state": optimizer.state_dict(),
+                            "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
+                            "val_stats": val_stats,
+                        },
+                        best_path,
+                    )
+                    print(f"[INFO] Saved new best checkpoint: {best_path} ({monitor_name}={metric_value:.4f})")
+                if distributed:
+                    dist.barrier()
+
+        if save_interval > 0 and (epoch % save_interval == 0 or epoch == epochs):
+            if is_main_process():
+                last_path = ckpt_dir / f"unet_epoch_{epoch}.pt"
                 save_checkpoint(
                     {
                         "epoch": epoch,
                         "model_type": "unet",
                         "config": copy.deepcopy(cfg),
-                        "model_state": model.state_dict(),
+                        "model_state": _unwrap(model).state_dict(),
                         "optimizer_state": optimizer.state_dict(),
                         "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
-                        "val_stats": val_stats,
+                        "train_stats": train_stats,
                     },
-                    best_path,
+                    last_path,
                 )
-                print(f"[INFO] Saved new best checkpoint: {best_path} ({monitor_name}={metric_value:.4f})")
-
-        if save_interval > 0 and (epoch % save_interval == 0 or epoch == epochs):
-            last_path = ckpt_dir / f"unet_epoch_{epoch}.pt"
-            save_checkpoint(
-                {
-                    "epoch": epoch,
-                    "model_type": "unet",
-                    "config": copy.deepcopy(cfg),
-                    "model_state": model.state_dict(),
-                    "optimizer_state": optimizer.state_dict(),
-                    "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
-                    "train_stats": train_stats,
-                },
-                last_path,
-            )
-            print(f"[INFO] Saved checkpoint: {last_path}")
+                print(f"[INFO] Saved checkpoint: {last_path}")
+            if distributed:
+                dist.barrier()
 
 
 if __name__ == "__main__":

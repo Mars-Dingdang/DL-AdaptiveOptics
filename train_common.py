@@ -7,9 +7,13 @@ import argparse
 import random
 from typing import Any
 
+import os
+
 import numpy as np
 import torch
+import torch.distributed as dist
 from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data.distributed import DistributedSampler
 import yaml
 
 from data.dataset import (
@@ -45,23 +49,38 @@ def load_config(path: Path) -> dict[str, Any]:
     return cfg
 
 
-def set_seed(seed: int) -> None:
-    """Set random seed for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+def set_seed(seed: int, rank: int = 0) -> None:
+    """Set random seed for reproducibility.
+
+    Under DDP, callers should pass the per-process rank so that each rank's
+    DataLoader workers and CPU augmentation streams get distinct seeds while
+    remaining reproducible across runs.
+    """
+    effective_seed = int(seed) + int(rank)
+    random.seed(effective_seed)
+    np.random.seed(effective_seed)
+    torch.manual_seed(effective_seed)
+    torch.cuda.manual_seed_all(effective_seed)
 
 
-def resolve_device(device_cfg: str) -> torch.device:
-    """Resolve runtime device from config string."""
+def resolve_device(device_cfg: str, local_rank: int = 0) -> torch.device:
+    """Resolve runtime device from config string.
+
+    When `local_rank > 0` (DDP child process) and CUDA is available, returns
+    `cuda:{local_rank}` so each rank pins its own GPU. Single-process callers
+    can omit `local_rank` and behavior is identical to the original.
+    """
     value = device_cfg.lower().strip()
     if value == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            return torch.device(f"cuda:{int(local_rank)}")
+        return torch.device("cpu")
     if value in {"cuda", "cpu"}:
         if value == "cuda" and not torch.cuda.is_available():
             print("[WARN] CUDA requested but not available, falling back to CPU.")
             return torch.device("cpu")
+        if value == "cuda":
+            return torch.device(f"cuda:{int(local_rank)}")
         return torch.device(value)
     raise ValueError(f"Unsupported device config: {device_cfg}")
 
@@ -272,8 +291,23 @@ def build_datasets(cfg: dict[str, Any], seed: int) -> tuple[Dataset[Any], Datase
     return train_ds, val_ds
 
 
-def build_dataloaders(cfg: dict[str, Any], seed: int) -> tuple[DataLoader[Any], DataLoader[Any]]:
-    """Build train and validation dataloaders."""
+def build_dataloaders(
+    cfg: dict[str, Any],
+    seed: int,
+    distributed: bool = False,
+    rank: int = 0,
+    world_size: int = 1,
+) -> tuple[DataLoader[Any], DataLoader[Any]]:
+    """Build train and validation dataloaders.
+
+    When `distributed=True`, wraps both datasets with `DistributedSampler` and
+    disables shuffle on the loader (the sampler handles shuffling). Callers
+    must invoke `train_loader.sampler.set_epoch(epoch)` at the start of each
+    epoch to ensure proper cross-rank shuffling.
+
+    Note: `batch_size` in config is interpreted as the per-rank batch size.
+    Effective global batch = batch_size * world_size.
+    """
     data_cfg = cfg["data"]
     train_ds, val_ds = build_datasets(cfg=cfg, seed=seed)
     num_workers = int(data_cfg["num_workers"])
@@ -284,10 +318,33 @@ def build_dataloaders(cfg: dict[str, Any], seed: int) -> tuple[DataLoader[Any], 
         loader_extra_kwargs["persistent_workers"] = bool(data_cfg.get("persistent_workers", True))
         loader_extra_kwargs["prefetch_factor"] = max(1, int(data_cfg.get("prefetch_factor", 2)))
 
+    if distributed:
+        train_sampler: DistributedSampler[Any] | None = DistributedSampler(
+            train_ds,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+            seed=int(seed),
+            drop_last=True,
+        )
+        val_sampler: DistributedSampler[Any] | None = DistributedSampler(
+            val_ds,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=False,
+            drop_last=False,
+        )
+        train_shuffle = False
+    else:
+        train_sampler = None
+        val_sampler = None
+        train_shuffle = True
+
     train_loader = DataLoader(
         train_ds,
         batch_size=int(data_cfg["batch_size"]),
-        shuffle=True,
+        shuffle=train_shuffle,
+        sampler=train_sampler,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=True,
@@ -297,6 +354,7 @@ def build_dataloaders(cfg: dict[str, Any], seed: int) -> tuple[DataLoader[Any], 
         val_ds,
         batch_size=int(data_cfg.get("val_batch_size", data_cfg["batch_size"])),
         shuffle=False,
+        sampler=val_sampler,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
@@ -359,3 +417,135 @@ def adapt_degraded_for_model(degraded: torch.Tensor, cfg: dict[str, Any]) -> tor
         return degraded[:, center_idx, ...]
 
     raise ValueError(f"Unsupported data.sequence_input strategy: {strategy}")
+
+
+# ---------------------------------------------------------------------------
+# Distributed (DDP) utilities
+# ---------------------------------------------------------------------------
+
+
+def _env_int(name: str, default: int = 0) -> int:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def is_dist_available_and_initialized() -> bool:
+    """Return True if torch.distributed is available and a process group is up."""
+    return dist.is_available() and dist.is_initialized()
+
+
+def get_rank() -> int:
+    """Global rank; 0 when distributed is not active."""
+    if is_dist_available_and_initialized():
+        return dist.get_rank()
+    return 0
+
+
+def get_world_size() -> int:
+    """World size; 1 when distributed is not active."""
+    if is_dist_available_and_initialized():
+        return dist.get_world_size()
+    return 1
+
+
+def is_main_process() -> bool:
+    """True for rank 0 (and for single-process runs)."""
+    return get_rank() == 0
+
+
+def init_distributed_mode() -> tuple[bool, int, int, int]:
+    """Initialise torch.distributed if launched via torchrun.
+
+    Detects ``LOCAL_RANK``/``RANK``/``WORLD_SIZE`` environment variables. If
+    present and ``WORLD_SIZE > 1``, initialises the NCCL process group and
+    pins the current CUDA device to ``local_rank``.
+
+    Returns:
+        (distributed, rank, world_size, local_rank)
+        - For single-process runs returns (False, 0, 1, 0).
+    """
+    world_size = _env_int("WORLD_SIZE", 1)
+    if world_size <= 1 or not dist.is_available():
+        return False, 0, 1, 0
+
+    rank = _env_int("RANK", 0)
+    local_rank = _env_int("LOCAL_RANK", 0)
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "DDP launch detected (WORLD_SIZE>1) but CUDA is not available. "
+            "DDP currently requires GPUs in this project."
+        )
+
+    backend = "nccl"
+    if not dist.is_initialized():
+        dist.init_process_group(backend=backend, init_method="env://")
+    torch.cuda.set_device(local_rank)
+    return True, rank, world_size, local_rank
+
+
+def cleanup_distributed() -> None:
+    """Tear down the process group if it was initialised. Safe to call always."""
+    try:
+        if is_dist_available_and_initialized():
+            dist.barrier()
+            dist.destroy_process_group()
+    except Exception as exc:  # pragma: no cover - best-effort cleanup
+        print(f"[WARN] cleanup_distributed encountered an error: {exc}")
+
+
+def reduce_dict(stats: dict[str, float], world_size: int | None = None) -> dict[str, float]:
+    """Average a dict of scalar metrics across ranks via all_reduce.
+
+    No-op when distributed is not initialised. Keys must be identical on all
+    ranks (callers should ensure stable ordering).
+    """
+    if not is_dist_available_and_initialized():
+        return dict(stats)
+    if world_size is None:
+        world_size = get_world_size()
+    if world_size <= 1 or not stats:
+        return dict(stats)
+
+    keys = sorted(stats.keys())
+    values = torch.tensor(
+        [float(stats[k]) for k in keys],
+        dtype=torch.float64,
+        device=torch.device(f"cuda:{torch.cuda.current_device()}") if torch.cuda.is_available() else torch.device("cpu"),
+    )
+    dist.all_reduce(values, op=dist.ReduceOp.SUM)
+    values = values / float(world_size)
+    return {k: float(values[i].item()) for i, k in enumerate(keys)}
+
+
+def reduce_sum_count(
+    sum_stats: dict[str, float],
+    count: int,
+) -> tuple[dict[str, float], int]:
+    """Reduce per-rank running sums and a sample count via all_reduce(SUM).
+
+    Used by validation loops where each rank processes a disjoint shard of the
+    val set; we need the global sum and the global number of batches/samples
+    to compute a true mean.
+    """
+    if not is_dist_available_and_initialized():
+        return dict(sum_stats), int(count)
+
+    keys = sorted(sum_stats.keys())
+    device = torch.device(f"cuda:{torch.cuda.current_device()}") if torch.cuda.is_available() else torch.device("cpu")
+
+    if keys:
+        values = torch.tensor([float(sum_stats[k]) for k in keys], dtype=torch.float64, device=device)
+        dist.all_reduce(values, op=dist.ReduceOp.SUM)
+        reduced = {k: float(values[i].item()) for i, k in enumerate(keys)}
+    else:
+        reduced = {}
+
+    count_t = torch.tensor([int(count)], dtype=torch.long, device=device)
+    dist.all_reduce(count_t, op=dist.ReduceOp.SUM)
+    return reduced, int(count_t.item())
