@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import os
 from typing import Callable
 
 from train_common import load_config
@@ -49,6 +50,22 @@ def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
     model_type = str(cfg.get("model", {}).get("type", "unet"))
+
+    # Safety rail: only the U-Net training path currently supports DDP.
+    # If launched via torchrun with WORLD_SIZE > 1 against another model type,
+    # fail fast rather than silently running redundant single-GPU training on
+    # every rank (which would also race on checkpoint files).
+    try:
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    except ValueError:
+        world_size = 1
+    if world_size > 1 and model_type.lower().strip() != "unet":
+        raise RuntimeError(
+            f"Multi-GPU (DDP) training is currently only supported for model.type='unet', "
+            f"but got model.type='{model_type}'. Either set model.type to 'unet', or launch "
+            f"with a single process (e.g. plain `python train.py`) for other model types."
+        )
+
     entrypoint = _select_training_main(model_type)
     entrypoint()
 

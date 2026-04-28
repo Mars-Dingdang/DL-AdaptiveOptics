@@ -151,190 +151,7 @@ baseline。
 
 ## 3. 项目文件树 Project File Tree
 
-```text
-Project/
-├─ README.md
-├─ AOReview.pdf
-├─ initial_plan.md
-├─ initial_prompt.md
-├─ requirements.txt
-├─ train.py
-├─ train_common.py
-├─ train_unet.py
-├─ train_gan.py
-├─ train_vae.py
-├─ train_diffusion.py
-├─ eval.py
-├─ configs/
-│  └─ default.yaml
-├─ data/
-│  ├─ __init__.py
-│  ├─ dataset.py
-│  ├─ download.py
-│  ├─ get_data.py
-│  ├─ raw/
-│  ├─ clean_patches/
-│  │  ├─ nwpu_parquet/
-│  │  ├─ NWPU-RESISC45/
-│  │  └─ ucm/
-│  ├─ turbulence_seq_nwpu_mild50_lmdb/
-│  └─ turbulence_seq_nwpu_mild50_test/
-├─ modules/
-│  ├─ __init__.py
-│  ├─ baseline_unet.py
-│  ├─ diffusion.py
-│  ├─ gan_models.py
-│  └─ vae.py
-├─ utils/
-│  ├─ __init__.py
-│  ├─ convert_sequence_to_lmdb.py
-│  ├─ degradation.py
-│  ├─ export_sequence_gifs.py
-│  ├─ metrics.py
-│  ├─ transcode_lmdb_codec.py
-│  ├─ visualization.py
-│  ├─ TurbulenceSim/
-│  └─ TurbulenceSimGPU/
-└─ demo/
-  └─ app.py
-```
 
----
-
-## 3. 每个文件的作用、实现方式与原理
-
-### 3.1 根目录
-
-- README.md
-  - 作用：项目说明、运行指南
-  - 实现方式：文档化项目目标、结构和命令
-  - 原理：保证团队可复现和可交接
-
-- initial_plan.md
-  - 作用：课程项目策划与阶段建议
-  - 实现方式：记录阶段目标、风险和展示策略
-  - 原理：项目管理与评分导向对齐
-
-- initial_prompt.md
-  - 作用：开发约束与目录规范
-  - 实现方式：定义 Phase 要求和代码规范
-  - 原理：将需求转化为工程实现清单
-
-- requirements.txt
-  - 作用：统一依赖管理
-  - 实现方式：列出 PyTorch、OpenCV、Gradio 等依赖
-  - 原理：环境可复现
-
-- train.py
-  - 作用：兼容调度入口（根据 `model.type` 分发到独立训练脚本）
-  - 实现方式：
-    - 读取 YAML 配置
-    - 自动分发到 `train_unet.py` / `train_gan.py` / `train_diffusion.py` / `train_vae.py`
-  - 原理：保持历史命令兼容，同时降低单文件复杂度
-
-- train_unet.py / train_gan.py / train_diffusion.py / train_vae.py
-  - 作用：独立训练入口，便于单模型调试
-  - 实现方式：
-    - 每个脚本维护独立训练循环和 checkpoint 逻辑
-    - 公共配置/数据加载能力复用 `train_common.py`
-  - 原理：职责分离，减少耦合和回归风险
-
-- eval.py
-  - 作用：统一离线评估入口
-  - 实现方式：
-    - 加载 checkpoint（UNet 或 GAN）
-    - 在验证集计算 PSNR/SSIM/LPIPS
-    - 可选保存可视化样例
-  - 原理：训练与评估分离，便于报告复现
-
-### 3.2 configs
-
-- configs/default.yaml
-  - 作用：集中管理超参数和路径
-  - 实现方式：包含数据路径、退化参数、模型类型、优化器、调度器等
-  - 原理：避免硬编码，便于实验对比
-
-### 3.3 data
-
-- data/get_data.py
-  - 作用：下载和准备公开遥感数据
-  - 实现方式：
-    - 支持 UC Merced 自动下载与解压
-    - 预留 WHU-RS19 / NWPU-VHR10 手动下载提示
-  - 原理：标准化数据入口，减少人工操作错误
-
-- data/dataset.py
-  - 作用：构建训练样本对 (degraded, clear)
-  - 实现方式：
-    - 扫描图片
-    - resize/crop/flip 预处理
-    - 在 __getitem__ 中调用退化模拟实时生成退化图
-  - 原理：在线退化增强数据多样性，避免提前离线生成占用大量存储
-
-### 3.4 modules
-
-- modules/baseline_unet.py
-  - 作用：U-Net 基线模型
-  - 实现方式：DoubleConv + Down + Up + skip connection
-  - 原理：多尺度特征融合，提升恢复细节能力
-
-- modules/gan_models.py
-  - 作用：条件 GAN 主模型与损失定义
-  - 实现方式：
-    - Generator：Pix2Pix 风格 U-Net
-    - Discriminator：PatchGAN
-    - 物理一致性损失：对生成图进行近似退化并约束与输入一致
-  - 原理：
-    - 对抗学习提升感知质量
-    - L1 保证内容保真
-    - 物理约束抑制不合理“幻觉细节”
-
-- modules/diffusion.py
-  - 作用：条件扩散模型骨架
-  - 实现方式：
-    - 前向扩散 q_sample
-    - 噪声预测目标 p_losses
-    - DDIM 采样 sample_ddim
-  - 原理：通过逐步去噪建模复杂条件分布
-
-- modules/vae.py
-  - 作用：条件 VAE 复原模型
-  - 实现方式：
-    - 条件编码器（输入退化图+真值图）学习后验
-    - 重参数化采样
-    - 条件解码器重建清晰图
-  - 原理：通过概率潜变量建模退化到清晰映射的不确定性
-
-### 3.5 utils
-
-- utils/degradation.py
-  - 作用：大气湍流与成像退化核心模块
-  - 实现方式：Zernike 相位屏 + PSF + 噪声 + 压缩伪影
-  - 原理：将 AO 场景中的波前畸变与传感器噪声过程转化为可训练的前向退化模型
-
-- utils/metrics.py
-  - 作用：评估指标计算
-  - 实现方式：
-    - skimage 计算 PSNR/SSIM
-    - 可选 LPIPS（懒加载）
-  - 原理：同时评估失真与感知质量
-
-- utils/visualization.py
-  - 作用：结果可视化与导出
-  - 实现方式：保存 Input/GT/Prediction 三联图
-  - 原理：为报告与海报提供直观证据
-
-### 3.6 demo
-
-- demo/app.py
-  - 作用：交互式展示应用
-  - 实现方式：
-    - Gradio 页面上传图像
-    - 加载 checkpoint 推理
-    - Image Slider 前后对比（缺插件时自动回退双图）
-  - 原理：提高现场展示效果与可解释性
-
----
 
 ## 4. 从零开始到成功运行：完整命令行流程
 
@@ -518,6 +335,23 @@ python train_unet.py --config configs/default.yaml
 
 - checkpoints/best_unet.pt
 - checkpoints/unet_epoch_*.pt
+
+#### 4.7.1 多卡训练（DDP，仅 U-Net）
+
+U-Net 训练已支持 PyTorch `DistributedDataParallel`，可在多 GPU 节点上通过 `torchrun` 启动：
+
+```bash
+# 双卡示例（单机）
+torchrun --standalone --nproc_per_node=2 train_unet.py --config configs/default.yaml
+```
+
+注意事项：
+
+- YAML 中的 `data.batch_size` 在 DDP 下表示**每卡** batch size，全局 batch = `batch_size × world_size`。如希望保持总 batch 不变，请手动减半。
+- 仅 rank 0 打印日志、写入 checkpoint；其他 rank 在 `dist.barrier()` 处等待。
+- 保存的 `best_unet.pt` 不带 `module.` 前缀，可直接被单卡 `eval.py` 加载。
+- 当前仅 U-Net 支持 DDP。GAN / Diffusion / VAE 在 `WORLD_SIZE > 1` 时通过 `train.py` 入口会被主动拒绝，避免静默冗余训练。
+- 4090D 等无 NVLink 的消费卡间通过 PCIe 通信，双卡实测加速比约 1.6–1.9×。
 
 ### 4.8 训练 GAN（可选）
 
