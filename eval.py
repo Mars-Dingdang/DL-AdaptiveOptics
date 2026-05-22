@@ -22,7 +22,13 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from data.dataset import DatasetParams, SequenceDatasetParams, TurbulencePairDataset, TurbulenceSequenceDataset
+from data.dataset import (
+    DatasetParams,
+    SequenceDatasetParams,
+    TurbulencePairDataset,
+    TurbulenceSequenceDataset,
+    TurbulenceSequenceLmdbDataset,
+)
 from modules.baseline_unet import build_baseline_unet
 from modules.gan_models import build_pix2pix_models
 from modules.diffusion import ConditionalDiffusionModel, DiffusionConfig
@@ -38,7 +44,7 @@ from train_common import (
     to_minus1_1,
 )
 from utils.metrics import RestorationMetrics
-from utils.visualization import save_batch_triplets
+from utils.visualization import save_batch_sequence_triplet_gifs, save_batch_triplets
 
 
 def parse_args() -> argparse.Namespace:
@@ -82,6 +88,7 @@ def build_eval_loader(
     """
     data_cfg = cfg["data"]
     data_mode = str(data_cfg.get("mode", "single")).lower().strip()
+    sequence_storage = str(data_cfg.get("sequence_storage", "folder")).lower().strip()
     train_root = Path(data_cfg["train_root"])
     val_root_str = str(data_cfg.get("val_root", "")).strip()
     test_root_str = str(data_cfg.get("test_root", "")).strip()
@@ -105,11 +112,18 @@ def build_eval_loader(
         if not test_root_str:
             raise RuntimeError("split=test requires data.test_root in config.")
         if data_mode == "sequence":
-            eval_ds = TurbulenceSequenceDataset(
-                root_dir=Path(test_root_str),
-                dataset_params=eval_params,
-                seed=seed + 1,
-            )
+            if sequence_storage == "lmdb":
+                eval_ds = TurbulenceSequenceLmdbDataset(
+                    lmdb_root=Path(test_root_str),
+                    dataset_params=eval_params,
+                    seed=seed + 1,
+                )
+            else:
+                eval_ds = TurbulenceSequenceDataset(
+                    root_dir=Path(test_root_str),
+                    dataset_params=eval_params,
+                    seed=seed + 1,
+                )
         else:
             eval_ds = TurbulencePairDataset(
                 root_dir=Path(test_root_str),
@@ -119,11 +133,18 @@ def build_eval_loader(
             )
     elif split == "val" and val_root_str:
         if data_mode == "sequence":
-            eval_ds = TurbulenceSequenceDataset(
-                root_dir=Path(val_root_str),
-                dataset_params=eval_params,
-                seed=seed + 1,
-            )
+            if sequence_storage == "lmdb":
+                eval_ds = TurbulenceSequenceLmdbDataset(
+                    lmdb_root=Path(val_root_str),
+                    dataset_params=eval_params,
+                    seed=seed + 1,
+                )
+            else:
+                eval_ds = TurbulenceSequenceDataset(
+                    root_dir=Path(val_root_str),
+                    dataset_params=eval_params,
+                    seed=seed + 1,
+                )
         else:
             eval_ds = TurbulencePairDataset(
                 root_dir=Path(val_root_str),
@@ -133,11 +154,18 @@ def build_eval_loader(
             )
     elif split == "val":
         if data_mode == "sequence":
-            full_ds = TurbulenceSequenceDataset(
-                root_dir=train_root,
-                dataset_params=eval_params,
-                seed=seed + 1,
-            )
+            if sequence_storage == "lmdb":
+                full_ds = TurbulenceSequenceLmdbDataset(
+                    lmdb_root=train_root,
+                    dataset_params=eval_params,
+                    seed=seed + 1,
+                )
+            else:
+                full_ds = TurbulenceSequenceDataset(
+                    root_dir=train_root,
+                    dataset_params=eval_params,
+                    seed=seed + 1,
+                )
         else:
             full_ds = TurbulencePairDataset(
                 root_dir=train_root,
@@ -188,6 +216,48 @@ def infer_model_type(ckpt: dict[str, Any], cfg: dict[str, Any], arg_type: str) -
     if ckpt_type in {"unet", "gan", "diffusion", "vae"}:
         return ckpt_type
     return str(cfg["model"]["type"]).lower().strip()
+
+
+def save_eval_samples(
+    *,
+    degraded: torch.Tensor,
+    degraded_model: torch.Tensor,
+    clear: torch.Tensor,
+    pred: torch.Tensor,
+    cfg: dict[str, Any],
+    out_dir: Path,
+    prefix: str,
+    saved_count: int,
+    max_save: int,
+) -> int:
+    """Save eval visualizations and return the number of newly saved samples."""
+    if saved_count >= max_save:
+        return 0
+
+    can_save = min(int(max_save - saved_count), int(pred.shape[0]))
+    if degraded.ndim == 5:
+        gif_cfg = cfg.get("build_sequence", {}).get("gif", {})
+        duration_ms = int(gif_cfg.get("duration_ms", 220))
+        return save_batch_sequence_triplet_gifs(
+            degraded_batch=degraded.detach().cpu(),
+            target_batch=clear.detach().cpu(),
+            pred_batch=pred.detach().cpu(),
+            out_dir=out_dir / "samples",
+            prefix=prefix,
+            start_index=saved_count,
+            max_items=can_save,
+            duration_ms=duration_ms,
+        )
+
+    return save_batch_triplets(
+        degraded_batch=(degraded_model[:, :3, ...]).detach().cpu(),
+        target_batch=clear.detach().cpu(),
+        pred_batch=pred.detach().cpu(),
+        out_dir=out_dir / "samples",
+        prefix=prefix,
+        start_index=saved_count,
+        max_items=can_save,
+    )
 
 
 def main() -> None:
@@ -263,15 +333,16 @@ def main() -> None:
                 n_batches += 1
 
                 if args.save_images and saved_count < args.max_save:
-                    can_save = min(int(args.max_save - saved_count), pred.shape[0])
-                    saved_count += save_batch_triplets(
-                        degraded_batch=(degraded_model[:, :3, ...]).detach().cpu(),
-                        target_batch=clear.detach().cpu(),
-                        pred_batch=pred.detach().cpu(),
-                        out_dir=out_dir / "samples",
+                    saved_count += save_eval_samples(
+                        degraded=degraded,
+                        degraded_model=degraded_model,
+                        clear=clear,
+                        pred=pred,
+                        cfg=cfg,
+                        out_dir=out_dir,
                         prefix="unet",
-                        start_index=saved_count,
-                        max_items=can_save,
+                        saved_count=saved_count,
+                        max_save=int(args.max_save),
                     )
 
     elif model_type == "gan":
@@ -303,15 +374,16 @@ def main() -> None:
                 n_batches += 1
 
                 if args.save_images and saved_count < args.max_save:
-                    can_save = min(int(args.max_save - saved_count), pred.shape[0])
-                    saved_count += save_batch_triplets(
-                        degraded_batch=(degraded_model[:, :3, ...]).detach().cpu(),
-                        target_batch=clear.detach().cpu(),
-                        pred_batch=pred.detach().cpu(),
-                        out_dir=out_dir / "samples",
+                    saved_count += save_eval_samples(
+                        degraded=degraded,
+                        degraded_model=degraded_model,
+                        clear=clear,
+                        pred=pred,
+                        cfg=cfg,
+                        out_dir=out_dir,
                         prefix="gan",
-                        start_index=saved_count,
-                        max_items=can_save,
+                        saved_count=saved_count,
+                        max_save=int(args.max_save),
                     )
 
     elif model_type == "diffusion":
@@ -354,15 +426,16 @@ def main() -> None:
                 n_batches += 1
 
                 if args.save_images and saved_count < args.max_save:
-                    can_save = min(int(args.max_save - saved_count), pred.shape[0])
-                    saved_count += save_batch_triplets(
-                        degraded_batch=(degraded_model[:, :3, ...]).detach().cpu(),
-                        target_batch=clear.detach().cpu(),
-                        pred_batch=pred.detach().cpu(),
-                        out_dir=out_dir / "samples",
+                    saved_count += save_eval_samples(
+                        degraded=degraded,
+                        degraded_model=degraded_model,
+                        clear=clear,
+                        pred=pred,
+                        cfg=cfg,
+                        out_dir=out_dir,
                         prefix="diffusion",
-                        start_index=saved_count,
-                        max_items=can_save,
+                        saved_count=saved_count,
+                        max_save=int(args.max_save),
                     )
 
     elif model_type == "vae":
@@ -396,15 +469,16 @@ def main() -> None:
                 n_batches += 1
 
                 if args.save_images and saved_count < args.max_save:
-                    can_save = min(int(args.max_save - saved_count), pred.shape[0])
-                    saved_count += save_batch_triplets(
-                        degraded_batch=(degraded_model[:, :3, ...]).detach().cpu(),
-                        target_batch=clear.detach().cpu(),
-                        pred_batch=pred.detach().cpu(),
-                        out_dir=out_dir / "samples",
+                    saved_count += save_eval_samples(
+                        degraded=degraded,
+                        degraded_model=degraded_model,
+                        clear=clear,
+                        pred=pred,
+                        cfg=cfg,
+                        out_dir=out_dir,
                         prefix="vae",
-                        start_index=saved_count,
-                        max_items=can_save,
+                        saved_count=saved_count,
+                        max_save=int(args.max_save),
                     )
 
     else:

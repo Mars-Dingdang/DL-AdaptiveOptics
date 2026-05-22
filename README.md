@@ -327,9 +327,11 @@ python train_unet.py --config configs/default.yaml
 
 - `data.mode: sequence`
 - `data.sequence_storage: lmdb`
-- `data.train_root: data/turbulence_seq_nwpu_ultramild_v2_lmdb`
+- `data.train_root: data/turbulence_seq_nwpu_mild50_lmdb`
 - `data.num_frames: 7`
 - `data.sequence_input: stack_channels`
+- `data.batch_size: 8`（DDP 下表示每卡 batch size）
+- `data.num_workers: 0`（当前 dev container 的 `/dev/shm` 较小，避免 DataLoader worker bus error）
 
 训练输出：
 
@@ -338,20 +340,46 @@ python train_unet.py --config configs/default.yaml
 
 #### 4.7.1 多卡训练（DDP，仅 U-Net）
 
-U-Net 训练已支持 PyTorch `DistributedDataParallel`，可在多 GPU 节点上通过 `torchrun` 启动：
+U-Net 训练已支持 PyTorch `DistributedDataParallel`。如果你在本仓库 dev container 中训练，推荐显式使用项目虚拟环境里的 Python 启动，避免 shell 中裸 `torchrun` 指向其他项目的 venv：
 
 ```bash
-# 双卡示例（单机）
-torchrun --standalone --nproc_per_node=2 train_unet.py --config configs/default.yaml
+cd /root/DL_AdaptiveOptics
+CUDA_VISIBLE_DEVICES=0,1 /root/DL_AdaptiveOptics/.venv/bin/python -m torch.distributed.run --standalone --nproc_per_node=2 train_unet.py --config configs/default.yaml
+```
+
+如果已经确认 `which torchrun` 指向当前项目环境，也可以使用较短命令：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 train_unet.py --config configs/default.yaml
 ```
 
 注意事项：
 
-- YAML 中的 `data.batch_size` 在 DDP 下表示**每卡** batch size，全局 batch = `batch_size × world_size`。如希望保持总 batch 不变，请手动减半。
+- YAML 中的 `data.batch_size` 在 DDP 下表示**每卡** batch size，全局 batch = `batch_size × world_size`。例如双卡且 `batch_size: 8` 时，全局 batch 为 16。
 - 仅 rank 0 打印日志、写入 checkpoint；其他 rank 在 `dist.barrier()` 处等待。
 - 保存的 `best_unet.pt` 不带 `module.` 前缀，可直接被单卡 `eval.py` 加载。
 - 当前仅 U-Net 支持 DDP。GAN / Diffusion / VAE 在 `WORLD_SIZE > 1` 时通过 `train.py` 入口会被主动拒绝，避免静默冗余训练。
 - 4090D 等无 NVLink 的消费卡间通过 PCIe 通信，双卡实测加速比约 1.6–1.9×。
+
+##### 是否可以增大 batch size？
+
+可以，但要区分两个限制：
+
+1. **GPU 显存限制**：增大 `data.batch_size` 会直接增加每张 GPU 的显存占用。当前 UNet 输入为 7 帧堆叠通道（`3 × 7 = 21` 通道），比单帧输入更吃显存。建议从 `8 -> 12 -> 16` 逐步尝试，并观察是否 OOM。
+2. **共享内存 `/dev/shm` 限制**：当前 dev container 的 `/dev/shm` 只有约 64MB，因此默认使用 `num_workers: 0`。如果只增大 batch size 但保持 `num_workers: 0`，主要瓶颈是 GPU 显存；如果同时把 `num_workers` 调大，可能再次遇到 `DataLoader worker ... Bus error`。
+
+保守调参建议：
+
+```yaml
+data:
+  batch_size: 12        # 每卡 batch size，双卡全局 batch=24
+  val_batch_size: 12
+  num_workers: 0        # 当前容器建议保持 0
+  persistent_workers: false
+  prefetch_factor: 2
+```
+
+如果你能用更大的容器共享内存启动环境（例如 Docker `--shm-size=8g` 或更大），再考虑提高 `num_workers`（如 4 或 8）和 `prefetch_factor` 来提升吞吐。否则，在当前 64MB `/dev/shm` 环境下，优先只增大 batch size，不要同时增加 DataLoader worker。
 
 ### 4.8 训练 GAN（可选）
 
@@ -434,6 +462,8 @@ python eval.py --config configs/default.yaml --checkpoint checkpoints/best_unet.
 
 - outputs/eval_*/metrics.txt
 - outputs/eval_*/samples/*.png
+
+对于 7 帧序列输入（`data.mode: sequence`），如果使用 `--save-images`，样例会保存为 `.gif`：左侧为 degraded sequence 动图，中间为 ground truth，右侧为模型生成结果。
 
 ### 4.9.1 独立验证/测试协议
 

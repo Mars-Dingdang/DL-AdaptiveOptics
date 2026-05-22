@@ -76,6 +76,11 @@ model:
   in_channels: 3
   out_channels: 3
   base_channels: 64
+  # TSR-WGAN specific overrides (only used when type=gan)
+  gan:
+    base_channels: 32        # 3D conv channels in TSR generator
+    num_blocks: 5            # number of TSR residual blocks
+    critic_base_channels: 64
   # diffusion-specific params (only used when type=diffusion)
   diffusion:
     timesteps: 1000
@@ -89,8 +94,12 @@ model:
 loss:
   l1_weight: 100.0  # legacy field (GAN now uses loss.gan.lambda_l1)
   gan:
-    lambda_l1: 100.0
-    lambda_physics: 10.0
+    # TSR-WGAN (WGAN-GP) hyperparameters.
+    lambda_l1: 100.0       # weight on pixel L1 between fake and real clear frame
+    lambda_gp: 10.0        # WGAN-GP gradient-penalty coefficient (paper default)
+    lambda_physics: 0.0    # 0 disables physics consistency; set ~5.0 to enable
+    n_critic: 5            # critic updates per generator update (WGAN-GP standard)
+    # Legacy fields kept for backward compatibility; ignored by train_gan.py:
     d_steps_per_g: 1
     real_label_smooth: 0.9
   diffusion:
@@ -101,8 +110,10 @@ loss:
 
 optimizer:
   learning_rate: 0.0002
-  gan_lr_g: 0.0002
-  gan_lr_d: 0.0001  # conservative default to reduce late-epoch D/G oscillation; tune per run
+  gan_lr_g: 0.0001       # WGAN-GP standard (paper Adam lr)
+  gan_lr_d: 0.0001       # symmetric LR for critic
+  gan_beta1: 0.5
+  gan_beta2: 0.9         # WGAN-GP standard (differs from Pix2Pix beta2=0.999)
   beta1: 0.5
   beta2: 0.999
   weight_decay: 0.0
