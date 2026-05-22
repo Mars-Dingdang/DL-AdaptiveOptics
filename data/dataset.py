@@ -21,6 +21,7 @@ from utils.degradation import TurbulenceParams, add_atmospheric_turbulence
 
 
 IMAGE_EXTENSIONS: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
+_LMDB_ENV_CACHE: dict[Path, lmdb.Environment] = {}
 
 
 @dataclass
@@ -332,14 +333,19 @@ class TurbulenceSequenceLmdbDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         if self._env is None:
             if not self.lmdb_root.exists():
                 raise FileNotFoundError(f"LMDB root does not exist: {self.lmdb_root}")
-            self._env = lmdb.open(
-                str(self.lmdb_root),
-                readonly=True,
-                lock=False,
-                readahead=False,
-                meminit=False,
-                subdir=True,
-            )
+            cache_key = self.lmdb_root.resolve()
+            env = _LMDB_ENV_CACHE.get(cache_key)
+            if env is None:
+                env = lmdb.open(
+                    str(self.lmdb_root),
+                    readonly=True,
+                    lock=False,
+                    readahead=False,
+                    meminit=False,
+                    subdir=True,
+                )
+                _LMDB_ENV_CACHE[cache_key] = env
+            self._env = env
         return self._env
 
     def _read_lmdb_bytes(self, key: str) -> bytes:

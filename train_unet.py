@@ -269,6 +269,7 @@ def _run(
     if is_main_process():
         ckpt_dir.mkdir(parents=True, exist_ok=True)
     monitor_name = str(ckpt_cfg.get("monitor", "psnr"))
+    save_best_only = bool(ckpt_cfg.get("save_best_only", False))
     best_value = -1e9
 
     scheduler_cfg = cfg.get("scheduler", {})
@@ -345,7 +346,7 @@ def _run(
                 if distributed:
                     dist.barrier()
 
-        if save_interval > 0 and (epoch % save_interval == 0 or epoch == epochs):
+        if (not save_best_only) and save_interval > 0 and (epoch % save_interval == 0 or epoch == epochs):
             if is_main_process():
                 last_path = ckpt_dir / f"unet_epoch_{epoch}.pt"
                 save_checkpoint(

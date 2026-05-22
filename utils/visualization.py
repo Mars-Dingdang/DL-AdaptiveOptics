@@ -13,6 +13,7 @@ from typing import Iterable
 
 import cv2
 import numpy as np
+from PIL import Image
 import torch
 
 
@@ -124,6 +125,86 @@ def save_batch_triplets(
 
         filename = f"{prefix}_{start_index + i:05d}.png"
         save_triplet_comparison(d, t, p, out_path / filename, with_labels=True)
+        count += 1
+
+    return count
+
+
+def save_sequence_triplet_gif(
+    degraded_sequence: torch.Tensor,
+    target: torch.Tensor,
+    pred: torch.Tensor,
+    path: str | Path,
+    duration_ms: int = 220,
+    loop: int = 0,
+    with_labels: bool = True,
+) -> None:
+    """Save an animated comparison: degraded sequence | target | prediction."""
+    if degraded_sequence.ndim != 4:
+        raise ValueError("degraded_sequence must be [T, C, H, W]")
+    if target.ndim != 3 or pred.ndim != 3:
+        raise ValueError("target and pred must be [C, H, W]")
+
+    target_img = tensor_chw_to_uint8_hwc(target)
+    pred_img = tensor_chw_to_uint8_hwc(pred)
+    if with_labels:
+        target_img = _put_label(target_img, "Ground Truth")
+        pred_img = _put_label(pred_img, "Prediction")
+
+    frames: list[Image.Image] = []
+    for frame_idx in range(degraded_sequence.shape[0]):
+        degraded_img = tensor_chw_to_uint8_hwc(degraded_sequence[frame_idx])
+        if with_labels:
+            degraded_img = _put_label(degraded_img, "Input")
+        canvas = np.concatenate([degraded_img, target_img, pred_img], axis=1)
+        frames.append(Image.fromarray(canvas, mode="RGB"))
+
+    if not frames:
+        raise ValueError("degraded_sequence must contain at least one frame")
+
+    path_obj = Path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
+    frames[0].save(
+        path_obj,
+        save_all=True,
+        append_images=frames[1:],
+        duration=int(duration_ms),
+        loop=int(loop),
+        optimize=False,
+    )
+
+
+def save_batch_sequence_triplet_gifs(
+    degraded_batch: torch.Tensor,
+    target_batch: torch.Tensor,
+    pred_batch: torch.Tensor,
+    out_dir: str | Path,
+    prefix: str,
+    start_index: int = 0,
+    max_items: int | None = None,
+    duration_ms: int = 220,
+) -> int:
+    """Save animated triplet GIFs from sequence batches."""
+    if degraded_batch.ndim != 5 or target_batch.ndim != 4 or pred_batch.ndim != 4:
+        raise ValueError("Expected degraded [B,T,C,H,W], target/pred [B,C,H,W]")
+
+    bsz = degraded_batch.shape[0]
+    n = bsz if max_items is None else min(bsz, max_items)
+
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    count = 0
+    for i in range(n):
+        filename = f"{prefix}_{start_index + i:05d}.gif"
+        save_sequence_triplet_gif(
+            degraded_sequence=degraded_batch[i],
+            target=target_batch[i],
+            pred=pred_batch[i],
+            path=out_path / filename,
+            duration_ms=duration_ms,
+            with_labels=True,
+        )
         count += 1
 
     return count

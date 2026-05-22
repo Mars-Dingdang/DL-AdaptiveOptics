@@ -71,17 +71,31 @@ def resolve_device(device_cfg: str, local_rank: int = 0) -> torch.device:
     can omit `local_rank` and behavior is identical to the original.
     """
     value = device_cfg.lower().strip()
+    mps_backend = getattr(torch.backends, "mps", None)
+    has_mps = bool(mps_backend is not None and mps_backend.is_available())
+
     if value == "auto":
         if torch.cuda.is_available():
             return torch.device(f"cuda:{int(local_rank)}")
+        if has_mps:
+            return torch.device("mps")
         return torch.device("cpu")
-    if value in {"cuda", "cpu"}:
-        if value == "cuda" and not torch.cuda.is_available():
+
+    if value == "cuda":
+        if not torch.cuda.is_available():
             print("[WARN] CUDA requested but not available, falling back to CPU.")
             return torch.device("cpu")
-        if value == "cuda":
-            return torch.device(f"cuda:{int(local_rank)}")
-        return torch.device(value)
+        return torch.device(f"cuda:{int(local_rank)}")
+
+    if value == "mps":
+        if not has_mps:
+            print("[WARN] MPS requested but not available, falling back to CPU.")
+            return torch.device("cpu")
+        return torch.device("mps")
+
+    if value == "cpu":
+        return torch.device("cpu")
+
     raise ValueError(f"Unsupported device config: {device_cfg}")
 
 
