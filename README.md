@@ -207,7 +207,7 @@ python -c "import cv2, yaml, skimage, gradio; print('deps_ok')"
 ### 4.6 下载数据（UC Merced）
 
 ```powershell
-python data/get_data.py --dataset uc_merced
+python -m data.get_data --dataset uc_merced
 ```
 
 下载完成后，默认训练路径为：
@@ -216,12 +216,12 @@ python data/get_data.py --dataset uc_merced
 
 ### 4.6.1 构建 NWPU 多帧湍流数据集（新增）
 
-1) 准备 NWPU-RESISC45 原始图像（手动下载后放置到 `data/raw/NWPU-RESISC45`）。
+1) 准备 NWPU-RESISC45 原始图像（手动下载后放置到 `data/raw/NWPU-RESISC45`）。可从百度 AI Studio 数据集页手动下载：https://aistudio.baidu.com/datasetdetail/51873
 
 2) 提取干净 Patch（默认 256x256，启发式去云，目标 5 万）：
 
 ```powershell
-python data/get_data.py --action extract_clean --input-root data/raw/NWPU-RESISC45 --output-root data/clean_patches/nwpu --patch-size 256 --stride 256 --max-patches 50000 --cloud-threshold 0.22 --seed 42
+python -m data.get_data --action extract_clean --input-root data/raw/NWPU-RESISC45 --output-root data/clean_patches/nwpu --patch-size 256 --stride 256 --max-patches 50000 --cloud-threshold 0.22 --seed 42
 ```
 
 3) 生成离线 7 帧湍流序列数据（配置驱动，默认读取 `configs/default.yaml` 的 `build_sequence + degradation`）：
@@ -599,7 +599,7 @@ python -m pip install gradio gradio-imageslider
 cd C:/Users/23826/Desktop/university/Grade1-2/DL/Project
 conda activate DLProject
 python -m pip install -r requirements.txt
-python data/get_data.py --dataset uc_merced
+python -m data.get_data --dataset uc_merced
 python train_unet.py --config configs/default.yaml
 python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt
 ```
@@ -664,7 +664,7 @@ nvidia-smi
 ### 8.6 下载数据（UC Merced）
 
 ```bash
-python data/get_data.py --dataset uc_merced
+python -m data.get_data --dataset uc_merced
 ```
 
 ### 8.7 开始训练（U-Net 默认配置）
@@ -786,7 +786,7 @@ cd /path/to/Project
 source ~/anaconda3/etc/profile.d/conda.sh
 conda activate DLProject
 python -m pip install -r requirements.txt
-python data/get_data.py --dataset uc_merced
+python -m data.get_data --dataset uc_merced
 python train_unet.py --config configs/default.yaml
 python demo/app.py --config configs/default.yaml --checkpoint checkpoints/best_unet.pt --host 0.0.0.0 --port 7860
 ```
