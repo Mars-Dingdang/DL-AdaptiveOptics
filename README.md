@@ -204,27 +204,77 @@ python -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is
 python -c "import cv2, yaml, skimage, gradio; print('deps_ok')"
 ```
 
-### 4.6 下载数据（UC Merced）
+### 4.6 数据准备
 
-```powershell
-python -m data.get_data --dataset uc_merced
-```
+本项目目前有两条数据流程：
 
-下载完成后，默认训练路径为：
+- **单图流程（当前推荐起点）**：使用 NWPU clean patch，在训练 / 评估时在线生成单张 degraded 图像；
+- **多帧流程**：使用同一批 NWPU clean patch 预生成离线湍流序列，再进行 sequence 模式训练。
 
-- data/raw/UCMerced_LandUse/Images
+当前推荐优先准备 **NWPU clean patch**，因为 4.6.1 的单图流程和 4.6.2 的多帧流程都会复用这一步。
 
-### 4.6.1 构建 NWPU 多帧湍流数据集（新增）
+先准备 NWPU 原始图像：
 
-1) 准备 NWPU-RESISC45 原始图像（手动下载后放置到 `data/raw/NWPU-RESISC45`）。可从百度 AI Studio 数据集页手动下载：https://aistudio.baidu.com/datasetdetail/51873
+1) 手动下载 NWPU-RESISC45，并放置到 `data/raw/NWPU-RESISC45`。
+   可从百度 AI Studio 数据集页下载：https://aistudio.baidu.com/datasetdetail/51873
 
-2) 提取干净 Patch（默认 256x256，启发式去云，目标 5 万）：
+2) 提取 clean patch：
 
 ```powershell
 python -m data.get_data --action extract_clean --input-root data/raw/NWPU-RESISC45 --output-root data/clean_patches/nwpu --patch-size 256 --stride 256 --max-patches 50000 --cloud-threshold 0.22 --seed 42
 ```
 
-3) 生成离线 7 帧湍流序列数据（配置驱动，默认读取 `configs/default.yaml` 的 `build_sequence + degradation`）：
+如果你只想快速跑通一个与 NWPU 主流程分离的 baseline，也可以额外下载 UC Merced 原始图像：
+
+```powershell
+python -m data.get_data --dataset uc_merced
+```
+
+下载完成后，UC Merced 原始图像默认位于：
+
+- `data/raw/UCMerced_LandUse/Images`
+
+### 4.6.1 单张图像训练 / 评估（当前推荐起点，NWPU）
+
+如果你当前的重点是**从单张图像进行生成 / 恢复**，推荐先使用 NWPU clean patch 上的在线退化单图流程，而不是多帧序列流程。
+
+对应配置文件：
+
+- `configs/train_single.yaml`
+
+### 单图训练 pipeline（NWPU）
+
+这个单图流程使用的是**现有 U-Net 训练脚本 + config 切换**，不需要改动 `train_unet.py` 或 `baseline_unet.py`。
+
+1. `data.train_root` 指向 `data/clean_patches/nwpu` 下的干净图像；
+2. `data.mode: single` 让训练/评估自动走单图数据路径；
+3. `TurbulencePairDataset` 会在每次取样时读取一张 clean patch；
+4. 数据增强后，在线调用退化函数生成一张 degraded 图像；
+5. U-Net 接收单张 degraded 图像并预测对应的 clear 图像；
+6. `eval.py` 复用同一套 config，在验证时保存 PNG 三联图（degraded / ground truth / prediction）。
+
+核心开关是：
+
+- `data.mode: single`：单图在线退化训练 / 评估
+- `data.mode: sequence`：离线多帧序列训练 / 评估
+
+开始训练（U-Net，NWPU 单图模式）：
+
+```powershell
+python train_unet.py --config configs/train_single.yaml
+```
+
+评估单图 U-Net：
+
+```powershell
+python eval.py --config configs/train_single.yaml --checkpoint checkpoints/single/best_unet.pt --split val --save-images --out-dir outputs/eval_unet_single
+```
+
+### 4.6.2 构建 NWPU 多帧湍流数据集（新增）
+
+本节默认你已经完成 4.6 中的 NWPU 原始数据准备和 clean patch 提取。
+
+下一步生成离线 7 帧湍流序列数据（配置驱动，默认读取 `configs/default.yaml` 的 `build_sequence + degradation`）：
 
 默认配置已启用 **direct LMDB only**，即直接写入 LMDB，不再落地 `sample_xxxxxxx/frame_xxx.png`。
 另外，`build_sequence.lmdb.map_size_gb: 0` 表示自动估算映射空间，避免预分配超大 `data.mdb`。
@@ -273,7 +323,7 @@ data/turbulence_seq_nwpu_ultramild_v2_lmdb/
 
 如果你想保守验证，建议在 `configs/default.yaml -> build_sequence.target_samples` 里先设为 1000 联调，再设为 `-1` 生成全量（`-1` 表示 clean pool 全量一次）。
 
-### 4.6.2 当前推荐：超温和湍流样本 direct LMDB 生成（PowerShell + Git Bash）
+### 4.6.3 当前推荐：超温和湍流样本 direct LMDB 生成（PowerShell + Git Bash）
 
 以下命令会使用 `configs/default.yaml` 中已配置好的参数直接生成 LMDB。
 
@@ -295,7 +345,7 @@ cd "/c/Users/23826/Desktop/university/Grade1-2/DL/Project"
 ls -la data/turbulence_seq_nwpu_ultramild_v2_lmdb
 ```
 
-### 4.6.3 兼容旧流程：将序列文件夹打包为 LMDB
+### 4.6.4 兼容旧流程：将序列文件夹打包为 LMDB
 
 如果你已经有历史 `sample_*` 文件夹数据，仍可用以下命令打包成 LMDB。
 
@@ -317,7 +367,26 @@ python utils/convert_sequence_to_lmdb.py --input-root data/turbulence_seq_nwpu_u
 - `data.sequence_storage: lmdb`
 - `data.train_root: data/turbulence_seq_nwpu_ultramild_v2_lmdb`
 
-### 4.7 开始训练（U-Net 默认配置）
+### 4.7 开始训练
+
+#### 4.7.0 单图起点（当前推荐）
+
+如果你按 4.6.1 走的是单图流程，请使用：
+
+```powershell
+python train_unet.py --config configs/train_single.yaml
+```
+
+单图配置的关键字段：
+
+- `data.mode: single`
+- `data.train_root: data/clean_patches/nwpu`
+- `model.in_channels: 3`
+- `checkpoint.dir: checkpoints/single`
+
+#### 4.7.1 多帧 U-Net（默认 sequence 配置）
+
+如果你按 4.6.2 走的是多帧序列流程，请使用：
 
 ```powershell
 python train_unet.py --config configs/default.yaml
@@ -335,10 +404,11 @@ python train_unet.py --config configs/default.yaml
 
 训练输出：
 
-- checkpoints/best_unet.pt
-- checkpoints/unet_epoch_*.pt
+- 单图流程：`checkpoints/single/best_unet.pt`
+- 多帧流程：`checkpoints/best_unet.pt`
+- 周期 checkpoint：`checkpoints/unet_epoch_*.pt`
 
-#### 4.7.1 多卡训练（DDP，仅 U-Net）
+#### 4.7.2 多卡训练（DDP，仅 U-Net）
 
 U-Net 训练已支持 PyTorch `DistributedDataParallel`。如果你在本仓库 dev container 中训练，推荐显式使用项目虚拟环境里的 Python 启动，避免 shell 中裸 `torchrun` 指向其他项目的 venv：
 
