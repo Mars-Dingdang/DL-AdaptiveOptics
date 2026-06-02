@@ -1,0 +1,6 @@
+checkpoint: checkpoints/best_unet.pt
+model_type: unet
+split: test
+batches: 10
+psnr: 26.830190
+ssim: 0.902037
