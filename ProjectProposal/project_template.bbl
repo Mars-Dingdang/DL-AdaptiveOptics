@@ -1,0 +1,20 @@
+\begin{thebibliography}{1}
+
+\bibitem{jin2021}
+Darui Jin, Ying Chen, Yi~Lu, Junzhang Chen, Peng Wang, Zichao Liu, Sheng Guo,
+  and Xiangzhi Bai.
+\newblock Neutralizing the impact of atmospheric turbulence on complex scene
+  imaging via deep learning.
+\newblock {\em Nature Machine Intelligence}, 3(10):876--884, 2021.
+
+\bibitem{DBLP:journals/corr/abs-2112-02379}
+Kangfu Mei and Vishal~M. Patel.
+\newblock {LTT-GAN:} looking through turbulence by inverting gans.
+\newblock {\em CoRR}, abs/2112.02379, 2021.
+
+\bibitem{wang2022zeroshotimagerestorationusing}
+Yinhuai Wang, Jiwen Yu, and Jian Zhang.
+\newblock Zero-shot image restoration using denoising diffusion null-space
+  model, 2022.
+
+\end{thebibliography}

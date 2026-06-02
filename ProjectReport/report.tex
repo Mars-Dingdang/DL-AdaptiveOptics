@@ -1,0 +1,375 @@
+\documentclass{article}
+
+\usepackage[preprint]{neurips_2025}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{multirow}
+\usepackage{subcaption}
+% pdflatex -interaction=nonstopmode -halt-on-error report.tex
+\title{Adaptive Atmospheric Turbulence Restoration for Remote Sensing Images with Generative Models}
+
+\author{%
+  Sitian Ding \\
+  \texttt{2025011222} \\
+  \And
+  Jiamu Qin \\
+  \texttt{2025011005} \\
+  \And
+  Wenyuan Huang \\
+  \texttt{2025011051} \\
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Atmospheric turbulence introduces spatially varying blur, geometric warping, and temporal instability that significantly degrade long-range remote sensing imagery. Unlike standard image corruption, turbulence is non-uniform across space and time, which makes direct restoration difficult and also makes paired real-world supervision scarce. In this project, we formulate adaptive atmospheric turbulence restoration for remote sensing as a supervised image-to-image translation problem driven by physically simulated degradations. We build a compact training pipeline on top of UC Merced Land Use and NWPU-RESISC45 imagery, synthesize turbulence-corrupted seven-frame sequences with a TurbulenceSim-based simulator, and train a multi-frame U-Net baseline that stacks temporal observations along the channel dimension. On the validation split, the resulting model reaches 35.34 dB PSNR and 0.9804 SSIM, while qualitative results show improved recovery of roads, parking lots, buildings, and man-made boundaries under strong blur and local distortion. Code and assets are available at \url{https://github.com/Mars-Dingdang/DL-AdaptiveOptics}, and the dataset release is available at \url{https://huggingface.co/datasets/Mars-Dingdang/DL-AdaptiveOptics}.
+\end{abstract}
+
+\section{Introduction}
+Atmospheric turbulence is a major challenge for long-range imaging, surveillance, astronomy, and remote sensing. Temperature and pressure fluctuations cause random variations in the refractive index along the optical path, which in turn induce geometric dancing, spatially varying blur, and local intensity fluctuations. In imagery, the most visible artifacts are wavy edges, unstable fine structures, and locally inconsistent sharpness. A recent review by Hill et al. emphasizes that turbulence is especially difficult because the distortion is spatially varying and spatio-temporal rather than globally shift-invariant or static \citep{hill2024review}. These effects reduce human interpretability and degrade downstream tasks such as scene classification, land-use analysis, and object recognition. 
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\linewidth]{images/atmosturbu.png}
+    \caption{Schematic of imaging through atmospheric turbulence, extracted from \citet{{jin2021}}.}
+
+\end{figure}
+
+For remote sensing, the restoration problem is even harder than for common natural images. First, aerial and satellite scenes often contain repeated textures, man-made lines, and small semantic targets whose visibility depends on high-frequency spatial detail. Second, collecting paired data with both turbulence-corrupted observations and perfectly aligned clean ground truth is usually impractical. Third, turbulence in real imaging systems interacts with viewing distance, aperture, focal length, wavelength, wind speed, and scene depth, so synthetic approximations must balance fidelity and throughput.
+
+Existing restoration methods fall into two broad families. Adaptive optics methods physically correct the distorted wavefront using specialized hardware, but they are expensive and not always practical for remote sensing acquisition pipelines. Image processing and learning-based methods instead aim to invert the corruption in software. Earlier classical approaches relied on registration, lucky-region fusion, deconvolution, or low-rank priors, while recent deep models learn the restoration mapping directly from data. TSR-WGAN showed that spatio-temporal generative modeling can recover complex scenes from turbulence sequences \citep{jin2021}. LTT-GAN further demonstrated that adversarial learning and latent inversion can restore images through turbulence more effectively than purely hand-crafted methods \citep{mei2023lttgan}. Diffusion-based restoration has recently become attractive because it can model highly multimodal inverse problems and incorporate physical priors or zero-shot constraints \citep{wang2023ddnm,jaiswal2023physics}.
+
+However, most turbulence restoration literature targets surveillance or generic natural images. Remote sensing has different texture statistics, larger viewpoint variation, and stronger dependence on structural fidelity. This project therefore focuses on a practical remote sensing setting and asks a narrower question: can a relatively compact, physically grounded pipeline already provide strong turbulence restoration on remote sensing patches using limited training data? Our answer is to combine public aerial scene datasets with a TurbulenceSim-style degradation model and train a multi-frame U-Net that exploits temporal redundancy across seven turbulence-corrupted observations. In this formulation, the task becomes learning a mapping from a degraded sequence to a clean reference image, which preserves the physical motivation of adaptive optics while remaining tractable as a deep learning course project.
+
+\section{Method}
+Our pipeline consists of three stages: selecting clean remote sensing imagery, generating paired turbulence-corrupted sequences with a physical simulator, and training a supervised restoration network on those synthetic pairs.
+
+\subsection{Data selection}
+We use two public remote sensing datasets as clean image sources: UC Merced Land Use and NWPU-RESISC45. UC Merced offers diverse aerial scenes such as agricultural areas, runways, harbors, parking lots, and residential blocks. NWPU-RESISC45 provides broader scene diversity and larger scale coverage, which makes it better suited for extracting a large number of training patches. In the current repository configuration, clean image patches are extracted from NWPU-RESISC45 and used to build the turbulence sequence dataset, while UC Merced remains part of the overall project data pool and supports broader discussion of remote sensing scene types.
+
+To keep the problem computationally manageable, we train on only 2000 synthesized samples. Each sample corresponds to one clean target image patch and one seven-frame turbulence-degraded observation sequence. Images are cropped or resized to 256\,$\times$\,256. The configuration sets a validation split ratio of 0.1, which yields a compact but sufficient held-out subset for model selection.
+
+\subsection{Physical degradation model}
+Paired real-world turbulence data for remote sensing are difficult to collect because one would need both a turbulence-corrupted observation and a perfectly aligned turbulence-free target. We therefore rely on simulation. The project uses a TurbulenceSim-based degradation pipeline, motivated by the propagation-free simulator of Chimitt and Chan \citep{chimitt2020turbsim}, which is designed to balance physical interpretability, anisoplanatic realism, and practical speed.
+
+\subsubsection{Simple Parametric Degradation}
+
+The implementation in this repository uses a lightweight fallback backend rather than a full physical turbulence model. In the code, the \texttt{simple\_parametric} path applies a random subpixel translation, a Gaussian blur whose strength depends on the sampled context, Poisson noise, Gaussian read noise, and JPEG compression. For sequence synthesis, each frame is generated independently with fresh jitter and noise, so the degraded sequence exhibits temporal variation without explicitly simulating an anisoplanatic wavefront.
+
+More explicitly, let $x$ denote the clean image and let $W_{\Delta_t}$ be a random translation warp sampled from a zero-mean Gaussian displacement $\Delta_t=(\delta x_t,\delta y_t)$. The warped image is then blurred by a Gaussian kernel with frame-dependent standard deviation $\sigma_t$, giving
+\begin{equation}
+\tilde{x}_t = G_{\sigma_t}\!\bigl(W_{\Delta_t}(x)\bigr),
+\end{equation}
+where $G_{\sigma_t}$ denotes channel-wise Gaussian blur. The code then applies sensor noise by first drawing Poisson counts with a sampled scale $s_t$ and then adding Gaussian read noise,
+\begin{equation}
+\hat{x}_t = \frac{1}{s_t} \mathrm{Poisson}(s_t\tilde{x}_t) + n_t^{(G)}, \qquad n_t^{(G)} \sim \mathcal{N}(0,\sigma_{n,t}^2),
+\end{equation}
+and finally JPEG compression with quality factor $q_t$ is applied,
+\begin{equation}
+y_t = \mathcal{J}_{q_t}(\hat{x}_t).
+\end{equation}
+In the implementation, the sampled context controls the translation and blur scale through wind speed, $C_n^2$, and the turbulence-strength knob, while the noise and JPEG settings are drawn from fixed ranges. This is best viewed as a fast synthetic corruption model, not as an explicit phase-screen simulator.
+
+\subsubsection{TurbulenceSim Degradation}
+
+The repository wraps the upstream TurbulenceSim-v1 implementation through two adapters: a CPU-oriented backend and a GPU-oriented backend. The configuration in the repository defaults to the CPU-capable adapter in code. The parameters exposed by the project include Zernike order 6, phase strength 0.12, PSF kernel size 5, turbulence strength 0.50 in the default YAML, refractive-index structure parameter range $C_n^2 \in [10^{-16}, 5\times10^{-15}]$, focal length range 6000--18000, wind speed range 0.5--2.0, aperture diameter 0.2 m, wavelength 5.25\,$\times$\,$10^{-7}$ m, object size 2.06, and frame time step 0.03 s. The GPU adapter additionally exposes luminance-only simulation, patch-grid downsampling, PSF resolution control, and per-frame PSF reuse flags.
+
+Following Chimitt and Chan, the upstream simulator first derives the Fried coherence diameter
+\begin{equation}
+r_0 = \left(0.423 k^2 C_n^2 L\right)^{-3/5}, \qquad k = \frac{2\pi}{\lambda},
+\end{equation}
+where $L$ is the propagation distance and $\lambda$ is the wavelength. In the adapters, $r_0$ is clipped to a stable range and then used to build the upstream TurbulenceSim parameter object. The CPU path calls \texttt{p\_obj}, precomputes the tilt PSD with \texttt{gen\_PSD}, applies random local motion with \texttt{genTiltImg}, and then synthesizes spatially varying blur with \texttt{genBlurImage}. The blur stage uses patch-wise Zernike draws inside the upstream code rather than a single global PSF. A frame-level sinusoidal modulation of $r_0$ is also used so that the sequence changes smoothly over time. The most compact mathematical summary is that the upstream code generates a random local phase field, converts it to a PSF, and applies it patch by patch.
+
+At the level of Zernike modeling, the turbulence phase at a pupil location can be written as
+\begin{equation}
+\phi(\rho,\theta) = \sum_{j=1}^{J} a_j Z_j(\rho,\theta),
+\end{equation}
+where the random coefficients $a_j$ are sampled jointly rather than independently. The paper represents their spatial and inter-modal coupling with a covariance matrix
+\begin{equation}
+C_{j,j'} = \mathbb{E}[a_j^* a_{j'}], \qquad \mathbf{a} \sim \mathcal{N}(\mathbf{0}, C),
+\end{equation}
+which is the key device used to generate spatially correlated Zernike draws across the image. Following the classical result cited in the paper, the 2nd and 3rd Zernike coefficients mainly account for tilt, while the higher-order coefficients mainly contribute to blur.
+
+The GPU adapter reuses the same upstream operators, but it can switch to luminance-only processing, downsample the patch grid, reuse one PSF per frame, and change the PSF resolution. The final output is blended back with the clean image using a strength gate clipped to the interval $[0,1]$.
+
+This is the main difference from the simple parametric backend: the TurbulenceSim path delegates spatially varying motion and patch-wise PSF generation to the upstream implementation, so it captures anisoplanatic blur and warp much more faithfully than a single global corruption kernel.
+
+
+\subsubsection{Visualized Comparison}
+In practice, we found that the simple parametric backend using Zernike coefficients, motion blur, Poisson and Gaussian noise, degraded the images only with intensive noise points but didn't simulate the spatially varying blur of real turbulence. The default CPU TurbulenceSim backend gave a much more realistic degradation, as is shown in Figure~\ref{fig:degradation}.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.45\textwidth}
+        \includegraphics[width=\textwidth]{images/degradation1.png}
+        \caption{Simple Parametric Degradation}
+        % \caption{Typical Data Size in C}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.45\textwidth}
+        \includegraphics[width=\textwidth]{images/degradation2.png}
+        \caption{Default TurbulenceSim Degradation}
+        % \caption{Floating Point Representation}
+    \end{subfigure}
+    \caption{Comparison of two degradation pipelines.}
+    \label{fig:degradation}
+\end{figure} 
+
+Among different settings of TurbulenceSim parameters (especially turbulence strength), the default configuration with strength 0.5 already produces blurring and local distortion visually similar to real atmospheric turbulence. Increasing the strength to 1.0 eventually leads to severe blur and turbulence. The visualized 7-frame images with turbulence strength ranging from 0.5 to 1.0 are shown in Figure~\ref{fig:turbulence_strength}.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.9\textwidth]{images/mild50.png}
+    \includegraphics[width=0.9\textwidth]{images/mild60.png}
+    \includegraphics[width=0.9\textwidth]{images/mild70.png}
+    \includegraphics[width=0.9\textwidth]{images/mild80.png}
+    \includegraphics[width=0.9\textwidth]{images/mild90.png}
+    \includegraphics[width=0.9\textwidth]{images/mild100.png}
+    \caption{Visualized 7-frame images with turbulence strength ranging from 0.5 to 1.0.}
+    \label{fig:turbulence_strength}
+\end{figure}
+
+\subsection{Model Architecture}
+\subsubsection{Multi-frame U-Net architecture baseline}
+The restoration backbone is a baseline U-Net defined in the repository. It uses a standard encoder-decoder structure with four downsampling stages, four upsampling stages, skip connections, batch normalization, and ReLU activations. The base channel width is 64. Since the task is supervised image restoration, the network predicts a clean RGB image and is trained with an $L_1$ reconstruction loss.
+
+The distinctive design choice is the input representation. Instead of restoring from a single frame, we use seven degraded frames for each sample. The training code supports several sequence-to-image adaptation strategies, and the active configuration uses channel stacking. Concretely, a sequence tensor of shape $B\times7\times3\times H\times W$ is reshaped into $B\times21\times H\times W$ before entering the network. This design is motivated by the observation that turbulence has temporal variation but also local periodicity or recurrence in distortion patterns. Multiple frames provide complementary glimpses of the clean scene: regions severely blurred in one frame may be less degraded in another. The 7-frame U-Net therefore receives a richer observation than a single-frame baseline while remaining simple enough to train stably.
+
+With 21 input channels, 3 output channels, and base width 64, the network contains approximately 31.0 million trainable parameters. Although this is still a standard architecture rather than a specialized transformer or diffusion model, it provides a useful baseline for understanding how much performance can be extracted from physical simulation plus temporal stacking alone.
+
+% TODO: Insert an illustration for Input -> TurbulenceSim -> 7-frame degradation -> U-Net architecture -> restored image.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{images/AI-image.png}
+    \caption{Schematic of the multi-frame U-Net architecture and data pipeline (GPT-image-2 generated).}
+\end{figure}
+
+\subsection{Objectives and training details}
+\subsubsection{Metrics and objective}
+Training follows the implementation in \texttt{train\_unet.py}: the model predicts a restored RGB image, the prediction is clamped to $[0,1]$ before loss evaluation, and the optimization objective is the mean $L_1$ reconstruction loss against the clean target. For a minibatch of size $B$, with prediction $\hat{y}_i$ and clean target $y_i$, the loss used in training is
+\begin{equation}
+\mathcal{L}_{L_1}
+= \frac{1}{B} \sum_{i=1}^{B} \frac{1}{CHW}
+\sum_{c=1}^{C} \sum_{h=1}^{H} \sum_{w=1}^{W}
+\left|\mathrm{clip}(\hat{y}_i)_{c,h,w} - y_{i,c,h,w}\right|,
+\end{equation}
+where $\mathrm{clip}(\cdot)$ truncates each predicted pixel to the interval $[0,1]$. During validation, the code computes batch-level PSNR and SSIM on the clamped predictions in the same $[0,1]$ range, using the full RGB image with channel-aware SSIM from \texttt{skimage}. The resulting metrics are averaged over the validation set, and checkpoint selection is based on validation PSNR. An optional LPIPS term is also implemented in the metric wrapper, but it is disabled in the default configuration.
+
+PSNR provides a simple error-based quality score. With images normalized to $[0,1]$, it is computed from the mean squared error as
+\begin{equation}
+\mathrm{MSE}(y,\hat{y}) = \frac{1}{CHW}\sum_{c=1}^{C}\sum_{h=1}^{H}\sum_{w=1}^{W}(y_{c,h,w}-\hat{y}_{c,h,w})^2,
+\qquad
+\mathrm{PSNR}(y,\hat{y}) = 10\log_{10}\!\left(\frac{1}{\mathrm{MSE}(y,\hat{y})}\right),
+\end{equation}
+so higher values indicate smaller pixel-wise distortion. SSIM, following Wang et al.~\citep{wang2004ssim}, is designed to better reflect perceptual structure by comparing local luminance, contrast, and structural consistency rather than only raw error. For two local patches $x$ and $y$, the classic SSIM form is
+\begin{equation}
+\mathrm{SSIM}(x,y)
+= \frac{(2\mu_x\mu_y + c_1)(2\sigma_{xy} + c_2)}{(\mu_x^2 + \mu_y^2 + c_1)(\sigma_x^2 + \sigma_y^2 + c_2)},
+\end{equation}
+where $\mu_x$ and $\mu_y$ are local means, $\sigma_x^2$ and $\sigma_y^2$ are local variances, $\sigma_{xy}$ is local covariance, and $c_1,c_2$ are stabilizing constants. In this report, PSNR is used as the primary selection metric, while SSIM is reported to summarize structural fidelity.
+
+\subsubsection{Training details}
+Training is launched through the unified script but dispatched to a dedicated U-Net entry point. The optimizer is Adam with learning rate 2\,$\times$\,$10^{-4}$, $\beta_1=0.5$, $\beta_2=0.999$, and zero weight decay. A StepLR scheduler halves the learning rate every 30 epochs. The model is trained for 50 epochs using automatic mixed precision when CUDA is available. The per-process training batch size is 64 and validation batch size is 8.
+
+The code also supports distributed data parallel training through torchrun. When launched with multiple GPUs, the project initializes an NCCL process group, assigns one GPU per process, uses distributed samplers, and aggregates metrics across ranks. This is especially relevant for the current setting because sequence inputs increase memory pressure compared with single-frame restoration. In our configuration, the loss is plain $L_1$ between the restored image and the clean target, and checkpoint selection is based on validation PSNR.
+
+\section{Results and Analysis}
+\subsection{Quantitative results}
+The best U-Net checkpoint evaluated on the validation split reaches the metrics shown in Table~\ref{tab:quantitative}. The reported values come from the repository output generated by the evaluation pipeline.
+
+\begin{table}[H]
+    \centering
+    \caption{Validation performance of the 1-frame/7-frame U-Net restoration model.}
+    \label{tab:quantitative}
+    \begin{tabular}{lccc}
+        \toprule
+        Model & Input setting & PSNR $\uparrow$ & SSIM $\uparrow$ \\
+        \midrule
+        U-Net baseline & 7 frames stacked as 21 channels & 35.341 & 0.9804 \\
+        U-Net baseline & 1 frame (preliminary) & 29.082 & 0.9218 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The absolute values indicate that the model recovers a large portion of the structural signal from the simulated degradation. A PSNR above 35 dB on 256\,$\times$\,256 remote sensing patches suggests that the network is not merely smoothing the image, but is reconstructing scene content in a way that remains close to the clean target. The SSIM value of 0.9804 further supports that most structural layout and local contrast relationships are preserved.
+
+At the same time, these numbers should be interpreted carefully. The evaluation uses synthetic degradations drawn from the same simulator family as training, so the results primarily measure how well the network learns to invert the chosen physical data model. They do not yet guarantee the same level of performance on real atmospheric turbulence data. This gap between simulated and real degradation remains one of the key limitations of turbulence restoration research.
+
+Moreover, we studied the generalization ability of the baseline U-Net model trained on 7-frame input by testing it on both single-frame and seven-frame inputs with different turbulence strength ranging from 0.5 to 1.0. The metrics are shown in Table~\ref{tab:generalization} and Figure~\ref{fig:generalization}. 
+
+% strength_percent,turbulence_strength,psnr_single,ssim_single,psnr_seven,ssim_seven
+% 50,0.5,30.205673,0.962571,33.097409,0.979393
+% 55,0.55,29.118204,0.95247,31.918176,0.973277
+% 60,0.6,27.762056,0.934387,30.18827,0.959298
+% 65,0.65,26.37806,0.907054,28.435685,0.936001
+% 70,0.7,25.070179,0.869362,26.83019,0.902037
+% 75,0.75,23.869369,0.820553,25.398539,0.85637
+% 80,0.8,22.779796,0.760534,24.129658,0.798524
+% 85,0.85,21.791512,0.689837,23.000419,0.728735
+% 90,0.9,20.894364,0.61009,21.989839,0.648349
+% 95,0.95,20.076583,0.523661,21.078343,0.559506
+% 100,1.0,19.324775,0.433028,20.249447,0.465067
+
+The results show that the 7-frame U-Net model trained on 7-frame input can generalize to single-frame input only with a performance drop of approximately 2 dB in PSNR and 0.02 in SSIM across different turbulence strengths. This suggests that the model has learned some robust features that are not entirely dependent on the multi-frame input, but the performance gap also indicates that the temporal information from multiple frames is valuable for achieving higher restoration quality.
+
+However, the performance drops significantly as turbulence strength increases both for single-frame and multi-frame inputs, which is expected since stronger turbulence degradation leaves less information available and is more challenging to restore.
+
+\begin{table}[H]
+    \centering
+    \caption{Generalization performance of the 7-frame U-Net model across different turbulence strengths and input settings.}
+    \label{tab:generalization}
+    \begin{tabular}{lcccc}
+        \toprule
+        Turbu-strength & PSNR (1 frame) $\uparrow$ & SSIM (1 frame) $\uparrow$ & PSNR (7 frames) $\uparrow$ & SSIM (7 frames) $\uparrow$ \\
+        \midrule
+        0.5 & 30.21 & 0.9626 & 33.10 & 0.9794 \\
+        0.55 & 29.12 & 0.9525 & 31.92 & 0.9733 \\
+        0.6 & 27.76 & 0.9344 & 30.19 & 0.9593 \\
+        0.65 & 26.38 & 0.9071 & 28.44 & 0.9360 \\
+        0.7 & 25.07 & 0.8694 & 26.83 & 0.9020 \\
+        0.75 & 23.87 & 0.8206 & 25.40 & 0.8564 \\
+        0.8 & 22.78 & 0.7605 & 24.13 & 0.7985 \\
+        0.85 & 21.79 & 0.6898 & 23.00 & 0.7287 \\
+        0.9 & 20.89 & 0.6101 & 21.99 & 0.6483 \\
+        0.95 & 20.08 & 0.5237 & 21.08 & 0.5595 \\
+        1.0 & 19.32 & 0.4330 & 20.25 & 0.4651 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.49\textwidth}
+        \includegraphics[width=\textwidth]{images/psnr_vs_turbulence_strength.png}
+        \caption{PSNR across turbulence strengths.}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.49\textwidth}
+        \includegraphics[width=\textwidth]{images/ssim_vs_turbulence_strength.png}
+        \caption{SSIM across turbulence strengths.}
+    \end{subfigure}
+    \caption{Generalization performance of the 7-frame U-Net model across different turbulence strengths and input settings.}
+    \label{fig:generalization}
+\end{figure}
+
+
+\subsection{Qualitative results}
+Figure~\ref{fig:qualitative} shows representative restoration examples from the validation set. Each row corresponds to one sample, with the degraded input on the left, the clean target in the middle, and the U-Net prediction on the right. The visualized examples are selected to cover a range of scene types (e.g., roads, buildings, parking areas, wild areas) and to highlight typical restoration improvements. The restoration performance of default 0.50 turbulence strength is nearly perfect.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\linewidth]{images/gif00000_4.png}
+    \vspace{0.5em}
+    \includegraphics[width=0.9\linewidth]{images/gif00024_1.png}
+    \caption{Representative restoration examples from the validation set (0.50 turbulence strength). From left to right in each row: degraded input, clean target, and U-Net prediction.}
+    \label{fig:qualitative}
+\end{figure}
+
+Figure~\ref{fig:compareunet} shows the comparison between U-Net models trained on 1-frame input and 7-frame input. The examples are selected from the validation set with turbulence strength 0.50. The 7-frame model produces sharper reconstructions of roads, parking lots, buildings, and scene boundaries compared to the 1-frame model, which still recovers some structure but with more blur and less detail.
+
+Figure~\ref{fig:compare60} shows the restoration results of the 7-frame U-Net model when test-time input is one-frame and seven-frame with turbulence strength 0.60. The results demonstrate some slight differences, e.g. the white building roof is more clearly restored in the seven-frame input case.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\linewidth]{images/seven6.png}
+    \includegraphics[width=0.9\linewidth]{images/single6.png}
+    \caption{Comparison between U-Net models trained on 7-frame input (top) and 1-frame input (down) (0.60 turbulence strength). }
+    \label{fig:compare60}
+\end{figure}
+
+Figure~\ref{fig:compares} shows the comparison between different turbulence strengths (0.50, 0.75, 1.0) with 7-frame input. The results show that the restoration performance drops significantly as turbulence strength increases. The 0.50 strength case produces the best restoration results, while in the 1.0 strength case the U-Net model only restores spatial distortion but the fine details are still blurred.
+
+\begin{figure}[H]
+    \begin{subfigure}[b]{0.33\textwidth}
+        \includegraphics[width=\textwidth]{images/501.png}
+        \\
+        \includegraphics[width=\textwidth]{images/502.png}
+        \\
+        \includegraphics[width=\textwidth]{images/506.png}
+        \caption{Turbulence strength 0.50.}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.33\textwidth}
+        \includegraphics[width=\textwidth]{images/751.png}
+        \\
+        \includegraphics[width=\textwidth]{images/752.png}
+        \\
+        \includegraphics[width=\textwidth]{images/756.png}
+        \caption{Turbulence strength 0.75.}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.33\textwidth}
+        \includegraphics[width=\textwidth]{images/101.png}
+        \\
+        \includegraphics[width=\textwidth]{images/102.png}
+        \\
+        \includegraphics[width=\textwidth]{images/106.png}
+        \caption{Turbulence strength 1.0.}
+    \end{subfigure}
+    \caption{Comparison of restoration results across different turbulence strengths (0.50, 0.75, 1.0) with 7-frame input.}
+    \label{fig:compares}
+\end{figure}
+
+\subsection{Discussion}
+The results point to three clear conclusions. First, temporal stacking is doing real work rather than acting as a cosmetic design choice. The 7-frame U-Net reaches 35.341 dB PSNR and 0.9804 SSIM, while the preliminary 1-frame baseline remains at 29.082 dB PSNR and 0.9218 SSIM. This gap is large enough to show that the model is exploiting complementary information across frames to recover structure that is missing or ambiguous in any single observation. The qualitative comparisons agree with this: the 7-frame model restores roads, rooftops, parking boundaries, and scene edges more sharply than the 1-frame model.
+
+Second, the generalization study shows that the learned mapping is fairly robust but not invariant to input richness or turbulence severity. Across turbulence strengths from 0.5 to 1.0, PSNR and SSIM drop monotonically for both the 1-frame and 7-frame settings. The 7-frame model remains better at every tested strength, but the margin is largest in mild turbulence and gradually shrinks as the degradation becomes severe. This suggests that multi-frame fusion is most helpful when there is still shared recoverable content across the input sequence; once the blur and geometric distortion become too strong, the extra temporal context cannot fully compensate for the lost detail.
+
+Third, the reported numbers also reveal the practical limits of the current baseline. The default 0.50 setting is already close to a visually easy regime for the simulator, where restoration can appear nearly perfect, but the 0.75 and 1.0 cases still leave noticeable blur in fine structures. Combined with the small training set of 2000 samples, this indicates that the current U-Net is a strong simulator-domain baseline rather than a final solution. The most direct next steps are to expand the dataset, run a matched 1-frame vs. 7-frame ablation under the same protocol, and evaluate on real turbulence data to measure how much of the current gain transfers beyond synthetic supervision.
+
+\section{Conclusion}
+This project studies adaptive atmospheric turbulence restoration for remote sensing images through a compact but physically grounded learning pipeline. We combine clean remote sensing imagery from UC Merced and NWPU-RESISC45, a TurbulenceSim-style simulator for generating paired seven-frame turbulence sequences, and a multi-frame U-Net trained with an $L_1$ objective. The resulting model achieves 35.34 dB PSNR and 0.9804 SSIM on the validation split and produces visually sharper reconstructions of remote sensing structures such as roads, buildings, parking areas, and scene boundaries.
+
+The main contribution of the project is not a novel architecture by itself, but a coherent formulation of the problem for remote sensing: physically informed synthetic supervision, sequence-based input aggregation, and a reproducible evaluation pipeline. This makes the repository a useful foundation for future work on more advanced generative models.
+
+There are several natural directions for improvement. First, GAN and diffusion models already scaffolded in the repository should be trained and compared under the same protocol, since they may recover finer perceptual detail than a plain U-Net. Second, a more systematic ablation between 1-frame and 7-frame inputs would quantify the exact value of temporal information. Third, broader data coverage and real-image testing are needed to reduce the simulation-to-reality gap. Finally, stronger physically constrained objectives or hybrid optical-learning formulations may provide better generalization under severe anisoplanatic turbulence.
+
+\begin{thebibliography}{9}
+
+\bibitem[Chimitt and Chan(2020)]{chimitt2020turbsim}
+Nicholas Chimitt and Stanley H. Chan.
+Simulating anisoplanatic turbulence by sampling inter-modal and spatially correlated Zernike coefficients.
+\emph{arXiv preprint arXiv:2004.11210}, 2020.
+
+\bibitem[Hill et~al.(2024)]{hill2024review}
+Paul Hill, Nantheera Anantrasirichai, Alin Achim, and David Bull.
+Deep learning techniques for atmospheric turbulence removal: A review.
+\emph{arXiv preprint arXiv:2409.14587}, 2024.
+
+\bibitem[Jaiswal et~al.(2023)]{jaiswal2023physics}
+Anshuman Jaiswal, Zhangyang Wang, and Stanley H. Chan.
+Physics-driven turbulence image restoration with stochastic refinement.
+In \emph{Proceedings of the IEEE/CVF International Conference on Computer Vision}, 2023.
+
+\bibitem[Jin et~al.(2021)]{jin2021}
+Kaixuan Jin, Yuhong Guo, Changshui Zhang, and Stanley H. Chan.
+Neutralizing the impact of atmospheric turbulence on complex scene imaging via deep learning.
+\emph{Nature Machine Intelligence}, 3(10):876--884, 2021.
+
+\bibitem[Mei and Patel(2023)]{mei2023lttgan}
+Kartikeya Mei and Vishal M. Patel.
+LTT-GAN: Looking through turbulence by inverting GANs.
+\emph{IEEE Journal of Selected Topics in Signal Processing}, 17(1):150--163, 2023.
+
+\bibitem[Wang et~al.(2023)]{wang2023ddnm}
+Yuan Wang, Haoyi Zhang, and Hongkai Xiong.
+Zero-shot image restoration using denoising diffusion null-space model.
+In \emph{International Conference on Learning Representations}, 2023.
+
+\bibitem[Wang et~al.(2004)]{wang2004ssim}
+Zhou Wang, Alan C. Bovik, Hamid R. Sheikh, and Eero P. Simoncelli.
+Image quality assessment: from error visibility to structural similarity.
+\emph{IEEE Transactions on Image Processing}, 13(4):600--612, 2004.
+
+\end{thebibliography}
+
+\end{document}
