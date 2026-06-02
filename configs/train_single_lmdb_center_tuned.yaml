@@ -1,0 +1,94 @@
+seed: 42
+
+experiment:
+  name: turbulence_restoration_single_lmdb_center_tuned
+  output_dir: outputs
+
+runtime:
+  device: auto
+  amp: true
+
+data:
+  mode: sequence
+  sequence_storage: lmdb
+  train_root: data/turbulence_seq_nwpu_mild50_lmdb
+  val_root: ""
+  test_root: ""
+  val_ratio: 0.1
+  image_size: 256
+  num_frames: 7
+  sequence_input: center_frame
+  random_crop: true
+  horizontal_flip_prob: 0.5
+  batch_size: 24
+  val_batch_size: 24
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 4
+
+degradation:
+  backend: turbsim_gpu_v1
+  zernike_order: 6
+  phase_strength: 0.12
+  psf_kernel_size: 5
+  gaussian_sigma_range: [0.3, 1.2]
+  motion_blur_prob: 0.25
+  motion_blur_kernel_range: [7, 17]
+  poisson_scale_range: [40.0, 120.0]
+  gaussian_noise_std_range: [0.003, 0.02]
+  jpeg_quality_range: [70, 98]
+  cn2_range: [1.0e-16, 5.0e-15]
+  focal_length_range: [6000.0, 18000.0]
+  wind_speed_range: [0.5, 2.0]
+  sequence_time_step: 0.03
+  aperture_diameter: 0.2
+  wavelength: 5.25e-7
+  object_size: 2.06
+  turbulence_strength: 0.5
+  turbsim_luma_only: true
+  turbsim_patch_grid_downsample: 2
+  turbsim_psf_resolution: 24
+  turbsim_reuse_psf_per_frame: true
+
+model:
+  type: unet
+  in_channels: 3
+  out_channels: 3
+  base_channels: 64
+
+loss:
+  l1_weight: 100.0
+
+optimizer:
+  learning_rate: 0.0002
+  beta1: 0.5
+  beta2: 0.999
+  weight_decay: 0.0
+
+scheduler:
+  enabled: true
+  step_size: 30
+  gamma: 0.5
+
+train:
+  epochs: 50
+  fast_train: true
+  tqdm: true
+  log_interval: 20
+  val_interval: 1
+  save_interval: 5
+  max_grad_norm: 0.0
+  train_metric_on_log: true
+  train_metric_interval: 0
+  train_metric_on_log_fast: false
+  train_metric_interval_fast: 0
+
+metrics:
+  compute_lpips: false
+  lpips_net: alex
+
+checkpoint:
+  dir: checkpoints/single_lmdb_center_tuned
+  save_best_only: true
+  monitor: psnr
