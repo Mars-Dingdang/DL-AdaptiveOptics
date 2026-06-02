@@ -1,0 +1,100 @@
+\documentclass{article}
+
+% to compile a preprint version, e.g., for submission to arXiv, add add the
+% [preprint] option:
+\usepackage[preprint]{neurips_2024}
+
+\usepackage[utf8]{inputenc} % allow utf-8 input
+\usepackage[T1]{fontenc}    % use 8-bit T1 fonts
+\usepackage{hyperref}       % hyperlinks
+\usepackage{url}            % simple URL typesetting
+\usepackage{booktabs}       % professional-quality tables
+\usepackage{amsfonts}       % blackboard math symbols
+\usepackage{nicefrac}       % compact symbols for 1/2, etc.
+\usepackage{microtype}      % microtypography
+\usepackage{xcolor}         % colors
+
+
+\title{Adaptive Atmospheric Turbulence Restoration for Remote Sensing Images with Generative Models}
+
+\author{%
+  Sitian Ding \\
+  \texttt{2025011222} \\
+  \And
+  Jiamu Qin \\
+  \texttt{2025011005} \\
+  \And
+  Wenyuan Huang \\
+  \texttt{2025011051} \\
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+  We propose to build and demonstrate a generative deep learning system that restores turbulence-degraded remote sensing images and compares supervised, adversarial, and diffusion-style restoration models on physically simulated atmospheric distortion.
+\end{abstract}
+
+\section{Introduction}
+Atmospheric turbulence is a major source of degradation in long-range imaging and remote sensing. It causes spatially varying geometric distortion, blur, and intensity fluctuation, which reduce image quality and hurt downstream tasks such as target recognition, land-use analysis, and scene interpretation. Compared with conventional image blur or noise, turbulence is harder to handle because its effects are random, non-uniform, and often vary across both space and time.
+
+Recent deep learning methods have shown that learned image restoration models can outperform hand-crafted inverse methods for this problem. TSR-WGAN demonstrates that generative models using spatial-temporal information can effectively recover complex scenes under turbulence \cite{jin2021}. LTT-GAN further shows that adversarial learning can be used to reconstruct clearer latent images from turbulence-corrupted observations \cite{DBLP:journals/corr/abs-2112-02379}. More recently, diffusion-based restoration has provided a flexible way to model complicated image degradation and recovery processes in a zero-shot or conditional setting \cite{wang2022zeroshotimagerestorationusing}. Inspired by these works, our project focuses on a practical remote sensing setting and aims to combine physical simulation with generative deep learning to build an adaptive restoration pipeline.
+
+Our project repository, \texttt{DL-AdaptiveOptics}, already organizes this problem as ``computational adaptive optics with generative models.'' Instead of directly modeling wavefront correction hardware, we formulate the task as learning a mapping from turbulence-degraded remote sensing images to clean images. This makes the project suitable for a deep learning course while still preserving the physical motivation of adaptive optics and atmospheric propagation.
+
+\section{Goal of Achievement}
+The goal of this project is to develop a complete restoration pipeline for turbulence-degraded remote sensing imagery and demonstrate that generative models can significantly improve visual quality and reconstruction metrics over a basic supervised baseline.
+
+More specifically, we aim to achieve the following measurable objectives:
+\begin{itemize}
+  \item Build a paired training dataset by generating turbulence-degraded remote sensing image sequences from clean aerial scene images.
+  \item Train and evaluate a supervised U-Net baseline for image restoration.
+  \item Train a generative adversarial model as our main method and compare it against the U-Net baseline using PSNR, SSIM, and qualitative visual results.
+  \item If time and computing resources allow, train a conditional diffusion model and/or a conditional VAE as stronger or complementary generative baselines.
+  \item Deliver a demonstration interface that allows a user to input a degraded image and visually compare restoration outputs from different models.
+\end{itemize}
+
+Our intended final demonstration is a small but complete system: given a turbulence-corrupted remote sensing image, the system produces restored outputs from multiple trained models and shows the differences in sharpness, structural fidelity, and robustness.
+
+\section{Methods}
+Our methodology combines physically inspired data generation with supervised generative model training.
+
+\textbf{Data preparation.} Based on the repository design, we will use public remote sensing scene datasets such as UC Merced and NWPU-RESISC45 as clean image sources, with optional extension to other remote sensing datasets if needed. We will crop or extract clean RGB image patches, remove low-quality or unsuitable samples, and then synthesize turbulence-degraded observations. The repository already includes a data generation pipeline that can produce degraded multi-frame sequences using configurable turbulence simulators. These simulators expose physically meaningful parameters such as refractive-index structure strength, focal length, wavelength, aperture, and wind speed, which allows us to create training data with controllable distortion severity.
+
+\textbf{Baseline model.} As a first stage, we will train a U-Net restoration network on paired degraded/clean samples. This baseline is important because it provides a stable supervised reference and helps us verify that the full data-training-evaluation pipeline works correctly.
+
+\textbf{Main generative model.} Our main method will be a conditional GAN-based restoration model. The generator learns to reconstruct a clean image from a degraded input, while the discriminator encourages realistic restored outputs. In addition to adversarial loss, we will use pixel-level reconstruction loss and a physics-motivated weighting term already supported by the repository configuration. We expect this model to recover finer textures and sharper structures than the U-Net baseline.
+
+\textbf{Extended models.} If our schedule permits, we will also test a conditional diffusion model and a conditional VAE. The diffusion model may provide higher-quality samples and better robustness on severe distortions, while the VAE offers a lighter probabilistic baseline. These models are already scaffolded in the repository, making them realistic extensions instead of speculative ideas.
+
+\textbf{Evaluation.} We will evaluate model outputs with PSNR and SSIM, and, if feasible, LPIPS for perceptual quality. We will also perform qualitative comparison on representative remote sensing scenes, focusing on whether roads, buildings, field boundaries, and object contours are restored more clearly. Our final deliverable will include both quantitative tables and a visual demo.
+
+\section{Timeline}
+Our tentative timeline for the project is as follows.
+
+\begin{itemize}
+  \item \textbf{Week 1:} Finalize the project scope, clean up the dataset preparation pipeline, and generate an initial paired turbulence dataset for experiments.
+  \item \textbf{Week 2:} Run sanity checks on the training pipeline and train the U-Net baseline. Evaluate basic reconstruction performance and identify failure cases.
+  \item \textbf{Week 3:} Train and tune the conditional GAN model, compare its results with the baseline, and improve data or loss settings if necessary.
+  \item \textbf{Week 4:} Explore the diffusion model and/or VAE extension if time permits. Conduct ablation or comparison experiments on distortion severity and model choice.
+  \item \textbf{Week 5:} Consolidate results, generate visual comparison figures, and prepare the final demonstration interface.
+  \item \textbf{Final week:} Prepare the poster, polish the report materials, and rehearse the final presentation.
+\end{itemize}
+
+We consider GAN-based restoration to be the core milestone. If diffusion training turns out to be too computationally expensive, we will prioritize a strong comparison between the U-Net baseline and the GAN model and ensure that the final demo is stable and complete.
+
+\section{Workload Distribution}
+We will divide the work across the team according to the major project components while keeping model evaluation and discussion collaborative.
+
+\begin{itemize}
+  \item \textbf{Sitian Ding (2025011222):} Overall coordination, turbulence data generation pipeline, dataset curation, and integration of physical simulation settings with the training workflow.
+  \item \textbf{Jiamu Qin (2025011005):} Model training and experimentation, with primary responsibility for the U-Net baseline and the conditional GAN training, hyperparameter tuning, and quantitative evaluation.
+  \item \textbf{Wenyuan Huang (2025011051):} Extended model exploration and demonstration system, including diffusion/VAE experiments when feasible, result visualization, and demo or poster preparation.
+\end{itemize}
+
+All team members will jointly analyze results, select representative qualitative examples, and contribute to writing the final report and preparing the poster presentation.
+
+\bibliographystyle{unsrt}
+\bibliography{ref}
+
+\end{document}

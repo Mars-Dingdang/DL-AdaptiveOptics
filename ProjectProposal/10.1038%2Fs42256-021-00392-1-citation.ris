@@ -1,0 +1,23 @@
+TY  - JOUR
+AU  - Jin, Darui
+AU  - Chen, Ying
+AU  - Lu, Yi
+AU  - Chen, Junzhang
+AU  - Wang, Peng
+AU  - Liu, Zichao
+AU  - Guo, Sheng
+AU  - Bai, Xiangzhi
+PY  - 2021
+DA  - 2021/10/01
+TI  - Neutralizing the impact of atmospheric turbulence on complex scene imaging via deep learning
+JO  - Nature Machine Intelligence
+SP  - 876
+EP  - 884
+VL  - 3
+IS  - 10
+AB  - A turbulent medium with eddies of different scales gives rise to fluctuations in the index of refraction during the process of wave propagation, which interferes with the original spatial relationship, phase relationship and optical path. The outputs of two-dimensional imaging systems suffer from anamorphosis brought about by this effect. Randomness, along with multiple types of degradation, make it a challenging task to analyse the reciprocal physical process. Here, we present a generative adversarial network (TSR-WGAN), which integrates temporal and spatial information embedded in the three-dimensional input to learn the representation of the residual between the observed and latent ideal data. Vision-friendly and credible sequences are produced without extra assumptions on the scale and strength of turbulence. The capability of TSR-WGAN is demonstrated through tests on our dataset, which contains 27,458 sequences with 411,870 frames of algorithm simulated data, physical simulated data and real data. TSR-WGAN exhibits promising visual quality and a deep understanding of the disparity between random perturbations and object movements. These preliminary results also shed light on the potential of deep learning to parse stochastic physical processes from particular perspectives and to solve complicated image reconstruction problems given limited data.
+SN  - 2522-5839
+UR  - https://doi.org/10.1038/s42256-021-00392-1
+DO  - 10.1038/s42256-021-00392-1
+ID  - Jin2021
+ER  - 

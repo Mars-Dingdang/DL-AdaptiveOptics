@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(pdflatex -interaction=nonstopmode -halt-on-error -output-directory \"/Users/mars_dingdang/Desktop/university/DeepLearning/ProjectProposal\" \"/Users/mars_dingdang/Desktop/university/DeepLearning/ProjectProposal/project_template.tex\")",
+      "Bash(bibtex \"/Users/mars_dingdang/Desktop/university/DeepLearning/ProjectProposal/project_template\")",
+      "Bash(bibtex project_template)",
+      "Bash(pdflatex -interaction=nonstopmode -halt-on-error project_template.tex)"
+    ]
+  }
+}
