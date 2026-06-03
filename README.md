@@ -92,6 +92,49 @@ baseline。
 > git lfs status    # 查看待提交的 LFS 文件
 > ```
 
+### 当前可直接使用的 U-Net checkpoints
+
+仓库中当前有四个可直接用于展示 / 对比的 U-Net checkpoint。它们的区别是：
+
+| 用途 | 湍流强度 | 输入协议 | Config | Checkpoint |
+|---|---:|---|---|---|
+| 多帧 U-Net | 0.5 | 7 帧 GIF / sequence，按通道堆叠为 21 通道 | `configs/eval_lmdb_stack_mild50.yaml` | `checkpoints/best_unet.pt` |
+| 单帧 U-Net | 0.5 | 7 帧序列的中心帧，3 通道 | `configs/train_single_lmdb_center_tuned.yaml` | `checkpoints/single_lmdb_center_tuned/best_unet.pt` |
+| 多帧 U-Net | 0.75 | 7 帧 GIF / sequence，按通道堆叠为 21 通道 | `configs/mild75.yaml` | `checkpoints/mild75/best_unet.pt` |
+| 单帧 U-Net | 0.75 | 7 帧序列的中心帧，3 通道 | `configs/train_single_mild75.yaml` | `checkpoints/single_mild75/best_unet.pt` |
+
+说明：
+
+- “多帧 U-Net” 不是 3D U-Net，也没有时序注意力模块；它把 7 帧 RGB 输入 reshape 为 `3 × 7 = 21` 个通道，再送入普通 2D U-Net。
+- “单帧 U-Net” 使用同一组 7 帧数据中的中心帧作为输入，因此适合与多帧模型做公平对比。
+- `.pt` 文件由 Git LFS 管理。克隆后请运行 `git lfs pull`，否则 checkpoint 可能只是 LFS pointer。
+
+### Presentation Demo 使用方法
+
+推荐使用新的 presentation demo：
+
+```bash
+python demo/presentation_app.py --host 127.0.0.1 --port 7862 --device auto
+```
+
+打开浏览器访问：
+
+```text
+http://127.0.0.1:7862
+```
+
+Demo 功能：
+
+- 主输入格式是 7 帧 animated GIF。
+- 支持两种模式：`0.5 turbulence` 和 `0.75 turbulence`。
+- 每种模式都会同时展示：
+  - 单帧 U-Net 输出（使用 GIF 的中心帧）
+  - 7 帧 U-Net 输出（使用 GIF 的全部 7 帧）
+- `Prepared Examples` 会优先读取 `demo/examples/mild50/` 和 `demo/examples/mild75/` 中已选好的展示样例。
+- 如果没有这些 demo examples，本地开发时会 fallback 到 LMDB 中自动 materialize 样例。
+
+用户上传自己的输入时，请上传一个包含 7 帧的 `.gif` 文件；demo 会自动解码 GIF 并送入对应模型。
+
 > [!IMPORTANT] 
 > Workflow
 > **GitHub Repo**: https://github.com/Mars-Dingdang/DL-AdaptiveOptics.git
