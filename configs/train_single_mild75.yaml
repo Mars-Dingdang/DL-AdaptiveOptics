@@ -1,0 +1,134 @@
+seed: 42
+
+experiment:
+  name: turbulence_restoration_single_mild75
+  output_dir: outputs
+
+runtime:
+  device: auto  # auto | cuda | cpu | mps
+  amp: true
+
+data:
+  mode: sequence  # single | sequence
+  sequence_storage: lmdb  # folder | lmdb
+  train_root: data/turbulence_seq_nwpu_mild75_lmdb
+  val_root: ""  # optional; if empty, split from train_root by val_ratio
+  test_root: ""  # required for final reporting; keep this independent from train/val
+  val_ratio: 0.1
+  image_size: 256
+  num_frames: 7
+  sequence_input: center_frame  # stack_channels | center_frame | mean
+  random_crop: true
+  horizontal_flip_prob: 0.5
+  batch_size: 24
+  val_batch_size: 24
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 4
+
+degradation:
+  backend: turbsim_cpu_v1 # turbsim_gpu_v1 | turbsim_cpu_v1 | simple_parametric
+  zernike_order: 6
+  phase_strength: 0.12
+  psf_kernel_size: 5
+  gaussian_sigma_range: [0.3, 1.2]
+  motion_blur_prob: 0.25
+  motion_blur_kernel_range: [7, 17]
+  poisson_scale_range: [40.0, 120.0]
+  gaussian_noise_std_range: [0.003, 0.02]
+  jpeg_quality_range: [70, 98]
+  cn2_range: [1.0e-16, 5.0e-15]
+  focal_length_range: [6000.0, 18000.0]
+  wind_speed_range: [0.5, 2.0]
+  sequence_time_step: 0.03
+  aperture_diameter: 0.2
+  wavelength: 5.25e-7
+  object_size: 2.06
+  turbulence_strength: 0.75
+  turbsim_luma_only: false
+  turbsim_patch_grid_downsample: 1
+  turbsim_psf_resolution: 32
+  turbsim_reuse_psf_per_frame: false
+
+build_sequence:
+  data_root: data
+  input_root: data/clean_patches/nwpu_parquet/images
+  output_root: data/turbulence_seq_nwpu_mild75
+  target_samples: 2000  # <=0 means full clean pool once
+  sample_start_index: 0
+  num_frames: 7
+  seed: 2029
+  gif:
+    duration_ms: 220
+    loop: 0
+    optimize: true
+  lmdb:
+    only: true
+    output_root: data/turbulence_seq_nwpu_mild75_lmdb
+    map_size_gb: 0  # 0 means auto-estimate to avoid oversized pre-allocation
+    image_codec: png  # high-throughput staging codec; transcode to webp offline if needed
+    image_quality: 92
+    prefetch_queue_size: 8  # overlap GPU simulation producer with CPU encode/write consumer
+
+model:
+  type: unet  # unet | gan | diffusion | vae
+  in_channels: 3
+  out_channels: 3
+  base_channels: 64
+  diffusion:
+    timesteps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+    ddim_steps: 50
+    ddim_eta: 0.0
+  vae:
+    latent_channels: 128
+
+loss:
+  l1_weight: 100.0
+  gan:
+    lambda_l1: 100.0
+    lambda_physics: 10.0
+    d_steps_per_g: 1
+    real_label_smooth: 0.9
+  diffusion:
+    noise_weight: 1.0
+  vae:
+    kl_weight: 0.01
+    kl_warmup_epochs: 10
+
+optimizer:
+  learning_rate: 0.0002
+  gan_lr_g: 0.0002
+  gan_lr_d: 0.0001
+  beta1: 0.5
+  beta2: 0.999
+  weight_decay: 0.0
+
+scheduler:
+  enabled: true
+  step_size: 30
+  gamma: 0.5
+
+train:
+  epochs: 50
+  fast_train: true
+  tqdm: true
+  log_interval: 20
+  val_interval: 1
+  save_interval: 5
+  max_grad_norm: 0.0
+  train_metric_on_log: true
+  train_metric_interval: 0
+  train_metric_on_log_fast: false
+  train_metric_interval_fast: 0
+
+metrics:
+  compute_lpips: false
+  lpips_net: alex
+
+checkpoint:
+  dir: checkpoints/single_mild75
+  save_best_only: true
+  monitor: psnr
