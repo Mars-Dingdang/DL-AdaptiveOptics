@@ -1,0 +1,6 @@
+checkpoint: checkpoints/mild75/best_unet.pt
+model_type: unet
+split: test
+batches: 10
+psnr: 21.821909
+ssim: 0.632463
