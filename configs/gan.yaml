@@ -1,0 +1,150 @@
+seed: 42
+
+experiment:
+  name: turbulence_restoration
+  output_dir: outputs
+
+runtime:
+  device: auto  # auto | cuda | cpu | mps
+  amp: false
+
+data:
+  mode: sequence  # single | sequence
+  sequence_storage: lmdb  # folder | lmdb
+  train_roots:
+    - data/turbulence_seq_nwpu_mild50_lmdb
+    - data/turbulence_seq_nwpu_mild75_lmdb
+  balance_train_roots: true
+  train_root: data/turbulence_seq_nwpu_mild50_lmdb  # legacy fallback; train_roots takes precedence
+  val_root: ""  # optional; if empty, split from train_root by val_ratio
+  test_root: ""  # required for final reporting; keep this independent from train/val
+  val_ratio: 0.1
+  image_size: 256
+  num_frames: 7
+  sequence_input: sequence_tensor  # sequence_tensor | stack_channels | center_frame | mean
+  random_crop: true
+  horizontal_flip_prob: 0.5
+  batch_size: 12
+  val_batch_size: 12
+  num_workers: 0
+  pin_memory: true
+  persistent_workers: false
+  prefetch_factor: 2
+
+degradation:
+  backend: turbsim_cpu_v1 # turbsim_gpu_v1 | turbsim_cpu_v1 | simple_parametric
+  zernike_order: 6
+  phase_strength: 0.12
+  psf_kernel_size: 5
+  gaussian_sigma_range: [0.3, 1.2]
+  motion_blur_prob: 0.25
+  motion_blur_kernel_range: [7, 17]
+  poisson_scale_range: [40.0, 120.0]
+  gaussian_noise_std_range: [0.003, 0.02]
+  jpeg_quality_range: [70, 98]
+  cn2_range: [1.0e-16, 5.0e-15]
+  focal_length_range: [6000.0, 18000.0]
+  wind_speed_range: [0.5, 2.0]
+  sequence_time_step: 0.03
+  aperture_diameter: 0.2
+  wavelength: 5.25e-7
+  object_size: 2.06
+  turbulence_strength: 0.5
+  turbsim_luma_only: false            # fastest mode: physics on luminance channel only
+  turbsim_patch_grid_downsample: 1   # >1 reduces blur patch count and speeds up generation
+  turbsim_psf_resolution: 32         # lower than 32 is faster with slight fidelity loss
+  turbsim_reuse_psf_per_frame: false  # fastest mode: reuse one PSF inside each frame
+
+build_sequence:
+  data_root: data
+  input_root: data/clean_patches/nwpu_parquet/images
+  output_root: data/turbulence_seq_nwpu_mild50
+  target_samples: 2000  # <=0 means full clean pool once
+  sample_start_index: 2000
+  num_frames: 7
+  seed: 2029
+  gif:
+    duration_ms: 220
+    loop: 0
+    optimize: true
+  lmdb:
+    only: true
+    output_root: data/turbulence_seq_nwpu_mild50_lmdb
+    map_size_gb: 0  # 0 means auto-estimate to avoid oversized pre-allocation
+    image_codec: png  # high-throughput staging codec; transcode to webp offline if needed
+    image_quality: 92
+    prefetch_queue_size: 8  # overlap GPU simulation producer with CPU encode/write consumer
+
+model:
+  type: tsr_wgan  # unet | gan | tsr_wgan | diffusion | vae
+  in_channels: 3
+  out_channels: 3
+  base_channels: 64
+  gan:
+    align_channels: 8
+    generator_base_channels: 16
+    critic_base_channels: 64
+    critic_clip_frames: 5
+    downsample_stages: 2
+    num_resblocks: 9
+    learn_residual: true
+  # diffusion-specific params (only used when type=diffusion)
+  diffusion:
+    timesteps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+    ddim_steps: 50  # number of steps for DDIM sampling during inference
+    ddim_eta: 0.0   # stochasticity parameter: 0.0 for deterministic
+  vae:
+    latent_channels: 128
+
+loss:
+  gan:
+    lambda_perceptual: 10.0
+    lambda_pixel: 10000.0
+    lambda_gp: 10.0
+    d_steps_per_g: 1
+  diffusion:
+    noise_weight: 1.0  # weight for noise prediction MSE loss
+  vae:
+    kl_weight: 0.01
+    kl_warmup_epochs: 10
+
+optimizer:
+  learning_rate: 0.0003
+  gan_lr_g: 0.0003
+  gan_lr_d: 0.00001
+  gan_beta1: 0.9
+  gan_beta2: 0.999
+  weight_decay: 0.0
+
+scheduler:
+  enabled: true
+  type: plateau  # step | plateau
+  mode: min
+  patience: 5
+  step_size: 20
+  gamma: 0.5
+
+train:
+  epochs: 30
+  fast_train: true  # throughput-first mode: reduce expensive train-time image metrics
+  tqdm: true
+  log_interval: 10
+  val_interval: 1
+  save_interval: 5
+  max_grad_norm: 0.0
+  train_metric_on_log: true
+  train_metric_interval: 0  # 0 means train metrics only follow train_metric_on_log behavior.
+  # Overrides when fast_train=true.
+  train_metric_on_log_fast: false
+  train_metric_interval_fast: 0
+
+metrics:
+  compute_lpips: false
+  lpips_net: alex
+
+checkpoint:
+  dir: checkpoints
+  save_best_only: true
+  monitor: psnr

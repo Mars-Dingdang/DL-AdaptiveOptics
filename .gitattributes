@@ -1,5 +1,7 @@
 *.zip filter=lfs diff=lfs merge=lfs -text
-*.pt filter=lfs diff=lfs merge=lfs -text
+**.pt filter=lfs diff=lfs merge=lfs -text
 checkpoints/best_unet.pt filter=lfs diff=lfs merge=lfs -text
 checkpoints/mild75/best_unet.pt filter=lfs diff=lfs merge=lfs -text
+checkpoints/best_tsr_wgan.pt filter=lfs diff=lfs merge=lfs -text
+checkpoints/
 data/raw/UCMerced_LandUse.zip filter=lfs diff=lfs merge=lfs -text
