@@ -21,14 +21,26 @@ DEFAULT_STRENGTHS = [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Sweep turbulence_strength, optionally build eval sets, run UNet evaluation, "
+            "Sweep turbulence_strength, optionally build eval sets, run restoration model evaluation, "
             "and plot PSNR/SSIM curves."
         )
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", type=Path, default=Path("checkpoints/best_unet.pt"))
     parser.add_argument("--input-root", type=Path, default=Path("data/clean_patches/nwpu_parquet/images"))
-    parser.add_argument("--output-root", type=Path, default=Path("outputs/eval_strength_sweep_unet"))
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=None,
+        help="Root directory for per-strength outputs, metrics, and summary plots.",
+    )
+    parser.add_argument(
+        "--model-type",
+        type=str,
+        default="",
+        choices=["", "unet", "gan", "diffusion", "vae"],
+        help="Optional model type override passed through to eval.py.",
+    )
     parser.add_argument("--start-index", type=int, default=2000)
     parser.add_argument("--count", type=int, default=10)
     parser.add_argument("--num-frames", type=int, default=7)
@@ -60,6 +72,21 @@ def parse_args() -> argparse.Namespace:
         help="Python interpreter used to run child scripts.",
     )
     return parser.parse_args()
+
+
+def infer_output_root(checkpoint: Path, model_type: str) -> Path:
+    suffix = model_type.strip().lower()
+    if not suffix:
+        checkpoint_name = checkpoint.stem.lower()
+        if "wgan" in checkpoint_name or "gan" in checkpoint_name:
+            suffix = "gan"
+        elif "diffusion" in checkpoint_name:
+            suffix = "diffusion"
+        elif "vae" in checkpoint_name:
+            suffix = "vae"
+        else:
+            suffix = "unet"
+    return Path(f"outputs/eval_strength_sweep_{suffix}")
 
 
 def load_yaml(path: Path) -> dict:
@@ -148,7 +175,7 @@ def main() -> None:
     args = parse_args()
 
     repo_root = Path.cwd()
-    output_root = args.output_root
+    output_root = args.output_root if args.output_root is not None else infer_output_root(args.checkpoint, args.model_type)
     output_root.mkdir(parents=True, exist_ok=True)
 
     summary_dir = output_root / "summary"
@@ -227,6 +254,7 @@ def main() -> None:
                     "eval.py",
                     "--config", str(eval_config_path),
                     "--checkpoint", str(args.checkpoint),
+                    "--model-type", str(args.model_type),
                     "--split", "test",
                     "--test-root", str(seven_lmdb),
                     "--batch-size", str(args.batch_size),
@@ -264,6 +292,7 @@ def main() -> None:
                     "eval.py",
                     "--config", str(eval_config_path),
                     "--checkpoint", str(args.checkpoint),
+                    "--model-type", str(args.model_type),
                     "--split", "test",
                     "--test-root", str(single_lmdb),
                     "--batch-size", str(args.batch_size),

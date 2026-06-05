@@ -12,7 +12,7 @@ import os
 import numpy as np
 import torch
 import torch.distributed as dist
-from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset
 from torch.utils.data.distributed import DistributedSampler
 import yaml
 
@@ -24,6 +24,85 @@ from data.dataset import (
     TurbulenceSequenceLmdbDataset,
 )
 from utils.degradation import TurbulenceParams
+
+
+class BalancedConcatDataset(Dataset[Any]):
+    """Round-robin dataset wrapper that balances multiple roots per epoch."""
+
+    def __init__(self, datasets: list[Dataset[Any]]) -> None:
+        if not datasets:
+            raise ValueError("BalancedConcatDataset requires at least one child dataset.")
+        self.datasets = datasets
+        self.num_datasets = len(datasets)
+        self.max_len = max(len(ds) for ds in datasets)
+
+    def __len__(self) -> int:
+        return self.max_len * self.num_datasets
+
+    def __getitem__(self, index: int) -> Any:
+        dataset_idx = int(index % self.num_datasets)
+        sample_idx = int(index // self.num_datasets) % len(self.datasets[dataset_idx])
+        return self.datasets[dataset_idx][sample_idx]
+
+
+def _normalize_root_list(value: Any) -> list[Path]:
+    """Normalize config values into a list of dataset roots."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        roots = [Path(str(item)).expanduser() for item in value if str(item).strip()]
+        return roots
+
+    root_str = str(value).strip()
+    if not root_str:
+        return []
+    return [Path(root_str).expanduser()]
+
+
+def _build_train_dataset_for_root(
+    root: Path,
+    cfg: dict[str, Any],
+    seed: int,
+    data_mode: str,
+    train_ds_params: DatasetParams | SequenceDatasetParams,
+    turbulence_params: TurbulenceParams,
+) -> Dataset[Any]:
+    data_cfg = cfg["data"]
+    if data_mode == "sequence":
+        sequence_storage = str(data_cfg.get("sequence_storage", "folder")).lower().strip()
+        if sequence_storage == "lmdb":
+            return TurbulenceSequenceLmdbDataset(lmdb_root=root, dataset_params=train_ds_params, seed=seed)
+        return TurbulenceSequenceDataset(root_dir=root, dataset_params=train_ds_params, seed=seed)
+
+    return TurbulencePairDataset(
+        root_dir=root,
+        dataset_params=train_ds_params,
+        turbulence_params=turbulence_params,
+        seed=seed,
+    )
+
+
+def _build_val_dataset_for_root(
+    root: Path,
+    cfg: dict[str, Any],
+    seed: int,
+    data_mode: str,
+    val_ds_params: DatasetParams | SequenceDatasetParams,
+    turbulence_params: TurbulenceParams,
+) -> Dataset[Any]:
+    data_cfg = cfg["data"]
+    if data_mode == "sequence":
+        sequence_storage = str(data_cfg.get("sequence_storage", "folder")).lower().strip()
+        if sequence_storage == "lmdb":
+            return TurbulenceSequenceLmdbDataset(lmdb_root=root, dataset_params=val_ds_params, seed=seed)
+        return TurbulenceSequenceDataset(root_dir=root, dataset_params=val_ds_params, seed=seed)
+
+    return TurbulencePairDataset(
+        root_dir=root,
+        dataset_params=val_ds_params,
+        turbulence_params=turbulence_params,
+        seed=seed,
+    )
 
 
 def parse_train_args(description: str) -> argparse.Namespace:
@@ -151,16 +230,19 @@ def _resolve_path(value: str | Path) -> Path:
 def validate_data_protocol(cfg: dict[str, Any]) -> None:
     """Validate and warn about train/val/test split configuration."""
     data_cfg = cfg.get("data", {})
-    train_root_str = str(data_cfg.get("train_root", "")).strip()
+    train_roots = _normalize_root_list(data_cfg.get("train_roots", data_cfg.get("train_root", "")))
     val_root_str = str(data_cfg.get("val_root", "")).strip()
     test_root_str = str(data_cfg.get("test_root", "")).strip()
 
-    if not train_root_str:
-        raise RuntimeError("data.train_root must be set.")
+    if not train_roots:
+        raise RuntimeError("data.train_root or data.train_roots must be set.")
 
-    train_root = _resolve_path(train_root_str)
+    train_root = _resolve_path(train_roots[0])
     val_root = _resolve_path(val_root_str) if val_root_str else None
     test_root = _resolve_path(test_root_str) if test_root_str else None
+
+    if len(train_roots) > 1 and val_root is not None:
+        print("[INFO] Multiple training roots configured. Validation root is treated as a separate held-out dataset.")
 
     if val_root is not None and val_root == train_root:
         print("[WARN] data.val_root points to the same location as data.train_root.")
@@ -187,11 +269,11 @@ def build_datasets(cfg: dict[str, Any], seed: int) -> tuple[Dataset[Any], Datase
     turbulence_params = build_turbulence_params(cfg)
     data_mode = str(data_cfg.get("mode", "single")).lower().strip()
 
-    train_root = Path(data_cfg["train_root"])
+    train_roots = _normalize_root_list(data_cfg.get("train_roots", data_cfg.get("train_root", "")))
     val_root_str = str(data_cfg.get("val_root", "")).strip()
+    balance_train_roots = bool(data_cfg.get("balance_train_roots", len(train_roots) > 1))
 
     if data_mode == "sequence":
-        sequence_storage = str(data_cfg.get("sequence_storage", "folder")).lower().strip()
         train_ds_params = SequenceDatasetParams(
             image_size=int(data_cfg["image_size"]),
             num_frames=int(data_cfg.get("num_frames", 7)),
@@ -204,18 +286,6 @@ def build_datasets(cfg: dict[str, Any], seed: int) -> tuple[Dataset[Any], Datase
             random_crop=False,
             horizontal_flip_prob=0.0,
         )
-        if sequence_storage == "lmdb":
-            train_full = TurbulenceSequenceLmdbDataset(
-                lmdb_root=train_root,
-                dataset_params=train_ds_params,
-                seed=seed,
-            )
-        else:
-            train_full = TurbulenceSequenceDataset(
-                root_dir=train_root,
-                dataset_params=train_ds_params,
-                seed=seed,
-            )
     else:
         train_ds_params = DatasetParams(
             image_size=int(data_cfg["image_size"]),
@@ -228,80 +298,84 @@ def build_datasets(cfg: dict[str, Any], seed: int) -> tuple[Dataset[Any], Datase
             horizontal_flip_prob=0.0,
         )
 
-        train_full = TurbulencePairDataset(
-            root_dir=train_root,
-            dataset_params=train_ds_params,
+    train_full_datasets = [
+        _build_train_dataset_for_root(
+            root=root,
+            cfg=cfg,
+            seed=seed + index,
+            data_mode=data_mode,
+            train_ds_params=train_ds_params,
             turbulence_params=turbulence_params,
-            seed=seed,
         )
+        for index, root in enumerate(train_roots)
+    ]
+
+    if len(train_full_datasets) == 1:
+        train_full = train_full_datasets[0]
+    elif balance_train_roots:
+        train_full = BalancedConcatDataset(train_full_datasets)
+    else:
+        train_full = ConcatDataset(train_full_datasets)
 
     if val_root_str:
         val_root = Path(val_root_str)
-        if data_mode == "sequence":
-            sequence_storage = str(data_cfg.get("sequence_storage", "folder")).lower().strip()
-            if sequence_storage == "lmdb":
-                val_ds = TurbulenceSequenceLmdbDataset(
-                    lmdb_root=val_root,
-                    dataset_params=val_ds_params,
-                    seed=seed + 1,
-                )
-            else:
-                val_ds = TurbulenceSequenceDataset(
-                    root_dir=val_root,
-                    dataset_params=val_ds_params,
-                    seed=seed + 1,
-                )
-        else:
-            val_ds = TurbulencePairDataset(
-                root_dir=val_root,
-                dataset_params=val_ds_params,
-                turbulence_params=turbulence_params,
-                seed=seed + 1,
-            )
+        val_ds = _build_val_dataset_for_root(
+            root=val_root,
+            cfg=cfg,
+            seed=seed + 1000,
+            data_mode=data_mode,
+            val_ds_params=val_ds_params,
+            turbulence_params=turbulence_params,
+        )
         return train_full, val_ds
-
-    n_total = len(train_full)
-    if n_total < 2:
-        raise RuntimeError("Need at least 2 images for train/val split.")
 
     val_ratio = float(data_cfg.get("val_ratio", 0.1))
     val_ratio = min(max(val_ratio, 0.01), 0.5)
-    n_val = max(1, int(round(n_total * val_ratio)))
-    n_train = max(1, n_total - n_val)
-    if n_train + n_val > n_total:
-        n_val = n_total - n_train
-
-    indices = np.arange(n_total)
-    rng = np.random.default_rng(seed)
-    rng.shuffle(indices)
-
-    val_idx = indices[:n_val].tolist()
-    train_idx = indices[n_val : n_val + n_train].tolist()
-
-    if data_mode == "sequence":
-        sequence_storage = str(data_cfg.get("sequence_storage", "folder")).lower().strip()
-        if sequence_storage == "lmdb":
-            val_full = TurbulenceSequenceLmdbDataset(
-                lmdb_root=train_root,
-                dataset_params=val_ds_params,
-                seed=seed + 1,
-            )
-        else:
-            val_full = TurbulenceSequenceDataset(
-                root_dir=train_root,
-                dataset_params=val_ds_params,
-                seed=seed + 1,
-            )
-    else:
-        val_full = TurbulencePairDataset(
-            root_dir=train_root,
-            dataset_params=val_ds_params,
+    per_root_train: list[Dataset[Any]] = []
+    per_root_val: list[Dataset[Any]] = []
+    for index, root in enumerate(train_roots):
+        train_source = _build_train_dataset_for_root(
+            root=root,
+            cfg=cfg,
+            seed=seed + index,
+            data_mode=data_mode,
+            train_ds_params=train_ds_params,
             turbulence_params=turbulence_params,
-            seed=seed + 1,
         )
+        val_source = _build_val_dataset_for_root(
+            root=root,
+            cfg=cfg,
+            seed=seed + index + 500,
+            data_mode=data_mode,
+            val_ds_params=val_ds_params,
+            turbulence_params=turbulence_params,
+        )
+        n_total = len(train_source)
+        if n_total < 2:
+            raise RuntimeError(f"Need at least 2 samples for train/val split in {root}.")
 
-    train_ds = Subset(train_full, train_idx)
-    val_ds = Subset(val_full, val_idx)
+        n_val = max(1, int(round(n_total * val_ratio)))
+        n_train = max(1, n_total - n_val)
+        if n_train + n_val > n_total:
+            n_val = n_total - n_train
+
+        indices = np.arange(n_total)
+        rng = np.random.default_rng(seed + index)
+        rng.shuffle(indices)
+        val_idx = indices[:n_val].tolist()
+        train_idx = indices[n_val : n_val + n_train].tolist()
+
+        per_root_train.append(Subset(train_source, train_idx))
+        per_root_val.append(Subset(val_source, val_idx))
+
+    if len(per_root_train) == 1:
+        train_ds = per_root_train[0]
+    elif balance_train_roots:
+        train_ds = BalancedConcatDataset(per_root_train)
+    else:
+        train_ds = ConcatDataset(per_root_train)
+
+    val_ds = per_root_val[0] if len(per_root_val) == 1 else ConcatDataset(per_root_val)
     return train_ds, val_ds
 
 
@@ -402,15 +476,21 @@ def resolve_cond_channels(cfg: dict[str, Any]) -> int:
     data_cfg = cfg.get("data", {})
     model_cfg = cfg.get("model", {})
     base_in = int(model_cfg.get("in_channels", 3))
+    model_type = str(model_cfg.get("type", "unet")).lower().strip()
 
     data_mode = str(data_cfg.get("mode", "single")).lower().strip()
     if data_mode != "sequence":
+        return base_in
+
+    if model_type == "tsr_wgan":
         return base_in
 
     strategy = str(data_cfg.get("sequence_input", "stack_channels")).lower().strip()
     num_frames = max(1, int(data_cfg.get("num_frames", 1)))
     if strategy == "stack_channels":
         return base_in * num_frames
+    if strategy == "sequence_tensor":
+        return base_in
     return base_in
 
 
@@ -420,7 +500,14 @@ def adapt_degraded_for_model(degraded: torch.Tensor, cfg: dict[str, Any]) -> tor
         return degraded
 
     data_cfg = cfg.get("data", {})
+    model_cfg = cfg.get("model", {})
+    model_type = str(model_cfg.get("type", "unet")).lower().strip()
+    if model_type == "tsr_wgan":
+        return degraded
+
     strategy = str(data_cfg.get("sequence_input", "stack_channels")).lower().strip()
+    if strategy == "sequence_tensor":
+        return degraded
     if strategy == "stack_channels":
         bsz, frames, channels, height, width = degraded.shape
         return degraded.reshape(bsz, frames * channels, height, width)

@@ -37,13 +37,13 @@ def _select_training_main(model_type: str) -> Callable[[], None]:
     mt = model_type.lower().strip()
     if mt == "unet":
         return train_unet_main
-    if mt == "gan":
+    if mt in {"gan", "tsr_wgan"}:
         return train_gan_main
     if mt == "diffusion":
         return train_diffusion_main
     if mt == "vae":
         return train_vae_main
-    raise ValueError(f"Unsupported model type: {model_type}. Expected 'unet', 'gan', 'diffusion', or 'vae'.")
+    raise ValueError(f"Unsupported model type: {model_type}. Expected 'unet', 'gan', 'tsr_wgan', 'diffusion', or 'vae'.")
 
 
 def main() -> None:
@@ -51,7 +51,7 @@ def main() -> None:
     cfg = load_config(args.config)
     model_type = str(cfg.get("model", {}).get("type", "unet"))
 
-    # Safety rail: only the U-Net training path currently supports DDP.
+    # Safety rail: only model types with explicit distributed support may run under torchrun.
     # If launched via torchrun with WORLD_SIZE > 1 against another model type,
     # fail fast rather than silently running redundant single-GPU training on
     # every rank (which would also race on checkpoint files).
@@ -59,9 +59,9 @@ def main() -> None:
         world_size = int(os.environ.get("WORLD_SIZE", "1"))
     except ValueError:
         world_size = 1
-    if world_size > 1 and model_type.lower().strip() != "unet":
+    if world_size > 1 and model_type.lower().strip() not in {"unet", "gan", "tsr_wgan"}:
         raise RuntimeError(
-            f"Multi-GPU (DDP) training is currently only supported for model.type='unet', "
+            f"Multi-GPU (DDP) training is currently only supported for model.type='unet', 'gan', or 'tsr_wgan', "
             f"but got model.type='{model_type}'. Either set model.type to 'unet', or launch "
             f"with a single process (e.g. plain `python train.py`) for other model types."
         )

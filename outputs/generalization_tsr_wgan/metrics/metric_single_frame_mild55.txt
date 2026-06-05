@@ -1,0 +1,6 @@
+checkpoint: checkpoints/best_tsr_wgan.pt
+model_type: gan
+split: test
+batches: 10
+psnr: 27.613775
+ssim: 0.925448

@@ -53,6 +53,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"), help="Config path")
     parser.add_argument("--checkpoint", type=Path, required=True, help="Checkpoint file path")
     parser.add_argument(
+        "--test-root",
+        type=Path,
+        default=None,
+        help="Optional override for data.test_root during evaluation.",
+    )
+    parser.add_argument(
         "--split",
         type=str,
         default="val",
@@ -71,6 +77,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-images", action="store_true", help="Save visual triplets")
     parser.add_argument("--max-save", type=int, default=30, help="Maximum number of images to save")
     parser.add_argument("--out-dir", type=Path, default=Path("outputs/eval"), help="Evaluation output dir")
+    parser.add_argument(
+        "--metrics-path",
+        type=Path,
+        default=None,
+        help="Optional override for the metrics report file path.",
+    )
+    parser.add_argument(
+        "--sample-dir",
+        type=Path,
+        default=None,
+        help="Optional override for saved sample images directory.",
+    )
     return parser.parse_args()
 
 
@@ -80,6 +98,7 @@ def build_eval_loader(
     split: str,
     batch_size_override: int,
     workers_override: int,
+    test_root_override: Path | None = None,
 ) -> DataLoader[Any]:
     """Build evaluation dataloader from requested split.
 
@@ -92,6 +111,8 @@ def build_eval_loader(
     train_root = Path(data_cfg["train_root"])
     val_root_str = str(data_cfg.get("val_root", "")).strip()
     test_root_str = str(data_cfg.get("test_root", "")).strip()
+    if test_root_override is not None:
+        test_root_str = str(test_root_override)
 
     turbulence_params = build_turbulence_params(cfg)
     if data_mode == "sequence":
@@ -226,6 +247,7 @@ def save_eval_samples(
     pred: torch.Tensor,
     cfg: dict[str, Any],
     out_dir: Path,
+    sample_dir: Path | None,
     prefix: str,
     saved_count: int,
     max_save: int,
@@ -242,7 +264,7 @@ def save_eval_samples(
             degraded_batch=degraded.detach().cpu(),
             target_batch=clear.detach().cpu(),
             pred_batch=pred.detach().cpu(),
-            out_dir=out_dir / "samples",
+            out_dir=sample_dir if sample_dir is not None else out_dir / "samples",
             prefix=prefix,
             start_index=saved_count,
             max_items=can_save,
@@ -253,7 +275,7 @@ def save_eval_samples(
         degraded_batch=(degraded_model[:, :3, ...]).detach().cpu(),
         target_batch=clear.detach().cpu(),
         pred_batch=pred.detach().cpu(),
-        out_dir=out_dir / "samples",
+        out_dir=sample_dir if sample_dir is not None else out_dir / "samples",
         prefix=prefix,
         start_index=saved_count,
         max_items=can_save,
@@ -277,6 +299,7 @@ def main() -> None:
         split=args.split,
         batch_size_override=int(args.batch_size),
         workers_override=int(args.num_workers),
+        test_root_override=args.test_root,
     )
     print(f"[INFO] Eval split: {args.split}, batches: {len(loader)}")
 
@@ -297,8 +320,10 @@ def main() -> None:
     if metric_computer.lpips.enabled and not metric_computer.lpips.available:
         print(f"[WARN] LPIPS disabled at runtime: {metric_computer.lpips.error_message}")
 
+    data_cfg = cfg["data"]
     model_cfg = cfg["model"]
     cond_channels = resolve_cond_channels(cfg)
+    gan_model_cfg = model_cfg.get("gan", {}) if isinstance(model_cfg.get("gan", {}), dict) else {}
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -340,6 +365,7 @@ def main() -> None:
                         pred=pred,
                         cfg=cfg,
                         out_dir=out_dir,
+                        sample_dir=args.sample_dir,
                         prefix="unet",
                         saved_count=saved_count,
                         max_save=int(args.max_save),
@@ -350,6 +376,14 @@ def main() -> None:
             in_channels=cond_channels,
             out_channels=int(model_cfg.get("out_channels", 3)),
             base_channels=int(model_cfg.get("base_channels", 64)),
+            frames_num=int(data_cfg.get("num_frames", 7)),
+            critic_clip_frames=int(gan_model_cfg.get("critic_clip_frames", 5)),
+            align_channels=int(gan_model_cfg.get("align_channels", 8)),
+            generator_base_channels=int(gan_model_cfg.get("generator_base_channels", 16)),
+            critic_base_channels=int(gan_model_cfg.get("critic_base_channels", 64)),
+            downsample_stages=int(gan_model_cfg.get("downsample_stages", 2)),
+            num_resblocks=int(gan_model_cfg.get("num_resblocks", 9)),
+            learn_residual=bool(gan_model_cfg.get("learn_residual", True)),
         )
         generator = generator.to(device)
 
@@ -381,6 +415,7 @@ def main() -> None:
                         pred=pred,
                         cfg=cfg,
                         out_dir=out_dir,
+                        sample_dir=args.sample_dir,
                         prefix="gan",
                         saved_count=saved_count,
                         max_save=int(args.max_save),
@@ -433,6 +468,7 @@ def main() -> None:
                         pred=pred,
                         cfg=cfg,
                         out_dir=out_dir,
+                        sample_dir=args.sample_dir,
                         prefix="diffusion",
                         saved_count=saved_count,
                         max_save=int(args.max_save),
@@ -476,6 +512,7 @@ def main() -> None:
                         pred=pred,
                         cfg=cfg,
                         out_dir=out_dir,
+                        sample_dir=args.sample_dir,
                         prefix="vae",
                         saved_count=saved_count,
                         max_save=int(args.max_save),
@@ -490,7 +527,8 @@ def main() -> None:
     mean_stats = {k: v / float(n_batches) for k, v in sum_stats.items()}
     print(f"[RESULT] {mean_stats}")
 
-    report_path = out_dir / "metrics.txt"
+    report_path = args.metrics_path if args.metrics_path is not None else out_dir / "metrics.txt"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("w", encoding="utf-8") as f:
         f.write(f"checkpoint: {ckpt_path}\n")
         f.write(f"model_type: {model_type}\n")

@@ -1,0 +1,191 @@
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 32.35212554235441, 'ssim': 0.9714472651481628}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild50.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 28.69528044504195, 'ssim': 0.9420975804328918}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild50.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 31.85684226708212, 'ssim': 0.9677472829818725}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild55.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 27.613774711885412, 'ssim': 0.9254476964473725}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild55.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 31.357570834282363, 'ssim': 0.9635588228702545}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild60.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 26.554181455921075, 'ssim': 0.9041301131248474}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild60.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 30.8434769509668, 'ssim': 0.9587871432304382}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild65.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 25.531916813860033, 'ssim': 0.8773221790790557}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild65.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 30.30135250506449, 'ssim': 0.9530144512653351}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild70.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 24.550300790979485, 'ssim': 0.8438707530498505}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild70.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 29.686422056046855, 'ssim': 0.9451443016529083}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild75.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 23.60277174153847, 'ssim': 0.8022720575332641}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild75.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 28.888801661194787, 'ssim': 0.932566350698471}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild80.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 22.690342414453433, 'ssim': 0.7509885191917419}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild80.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 27.714738720255163, 'ssim': 0.9092491328716278}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild85.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 21.804148286115453, 'ssim': 0.6879287123680115}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild85.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 25.893231793044002, 'ssim': 0.8592785716056823}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild90.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 20.94202546437025, 'ssim': 0.6117873430252075}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild90.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 23.213657486431025, 'ssim': 0.7376238286495209}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild95.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 20.10874148057507, 'ssim': 0.5228903651237488}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild95.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 20.23309486348552, 'ssim': 0.48001513779163363}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild100.txt
+[INFO] Saved sample images: 10
+[INFO] Eval device: cuda:0
+[INFO] Eval split: test, batches: 10
+[INFO] Model type: gan
+[RESULT] {'psnr': 19.332066873873607, 'ssim': 0.42572984248399737}
+[INFO] Metrics saved to: outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild100.txt
+[INFO] Saved sample images: 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_seven_frame_mild50 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/seven_frame/mild50 --sample-dir outputs/generalization_tsr_wgan/seven_frame/mild50/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild50.txt --save-images --max-save 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_single_frame_mild50 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/single_frame/mild50 --sample-dir outputs/generalization_tsr_wgan/single_frame/mild50/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild50.txt --save-images --max-save 10
+[DONE] strength=0.50 | single: PSNR=28.6953, SSIM=0.9421 | seven: PSNR=32.3521, SSIM=0.9714
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_seven_frame_mild55 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/seven_frame/mild55 --sample-dir outputs/generalization_tsr_wgan/seven_frame/mild55/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild55.txt --save-images --max-save 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_single_frame_mild55 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/single_frame/mild55 --sample-dir outputs/generalization_tsr_wgan/single_frame/mild55/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild55.txt --save-images --max-save 10
+[DONE] strength=0.55 | single: PSNR=27.6138, SSIM=0.9254 | seven: PSNR=31.8568, SSIM=0.9677
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_seven_frame_mild60 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/seven_frame/mild60 --sample-dir outputs/generalization_tsr_wgan/seven_frame/mild60/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild60.txt --save-images --max-save 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_single_frame_mild60 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/single_frame/mild60 --sample-dir outputs/generalization_tsr_wgan/single_frame/mild60/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild60.txt --save-images --max-save 10
+[DONE] strength=0.60 | single: PSNR=26.5542, SSIM=0.9041 | seven: PSNR=31.3576, SSIM=0.9636
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_seven_frame_mild65 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/seven_frame/mild65 --sample-dir outputs/generalization_tsr_wgan/seven_frame/mild65/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild65.txt --save-images --max-save 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_single_frame_mild65 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/single_frame/mild65 --sample-dir outputs/generalization_tsr_wgan/single_frame/mild65/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild65.txt --save-images --max-save 10
+[DONE] strength=0.65 | single: PSNR=25.5319, SSIM=0.8773 | seven: PSNR=30.8435, SSIM=0.9588
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_seven_frame_mild70 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/seven_frame/mild70 --sample-dir outputs/generalization_tsr_wgan/seven_frame/mild70/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild70.txt --save-images --max-save 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_single_frame_mild70 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/single_frame/mild70 --sample-dir outputs/generalization_tsr_wgan/single_frame/mild70/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild70.txt --save-images --max-save 10
+[DONE] strength=0.70 | single: PSNR=24.5503, SSIM=0.8439 | seven: PSNR=30.3014, SSIM=0.9530
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_seven_frame_mild75 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/seven_frame/mild75 --sample-dir outputs/generalization_tsr_wgan/seven_frame/mild75/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild75.txt --save-images --max-save 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_single_frame_mild75 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/single_frame/mild75 --sample-dir outputs/generalization_tsr_wgan/single_frame/mild75/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild75.txt --save-images --max-save 10
+[DONE] strength=0.75 | single: PSNR=23.6028, SSIM=0.8023 | seven: PSNR=29.6864, SSIM=0.9451
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_seven_frame_mild80 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/seven_frame/mild80 --sample-dir outputs/generalization_tsr_wgan/seven_frame/mild80/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild80.txt --save-images --max-save 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_single_frame_mild80 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/single_frame/mild80 --sample-dir outputs/generalization_tsr_wgan/single_frame/mild80/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild80.txt --save-images --max-save 10
+[DONE] strength=0.80 | single: PSNR=22.6903, SSIM=0.7510 | seven: PSNR=28.8888, SSIM=0.9326
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_seven_frame_mild85 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/seven_frame/mild85 --sample-dir outputs/generalization_tsr_wgan/seven_frame/mild85/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild85.txt --save-images --max-save 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_single_frame_mild85 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/single_frame/mild85 --sample-dir outputs/generalization_tsr_wgan/single_frame/mild85/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild85.txt --save-images --max-save 10
+[DONE] strength=0.85 | single: PSNR=21.8041, SSIM=0.6879 | seven: PSNR=27.7147, SSIM=0.9092
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_seven_frame_mild90 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/seven_frame/mild90 --sample-dir outputs/generalization_tsr_wgan/seven_frame/mild90/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild90.txt --save-images --max-save 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_single_frame_mild90 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/single_frame/mild90 --sample-dir outputs/generalization_tsr_wgan/single_frame/mild90/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild90.txt --save-images --max-save 10
+[DONE] strength=0.90 | single: PSNR=20.9420, SSIM=0.6118 | seven: PSNR=25.8932, SSIM=0.8593
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_seven_frame_mild95 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/seven_frame/mild95 --sample-dir outputs/generalization_tsr_wgan/seven_frame/mild95/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild95.txt --save-images --max-save 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_single_frame_mild95 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/single_frame/mild95 --sample-dir outputs/generalization_tsr_wgan/single_frame/mild95/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild95.txt --save-images --max-save 10
+[DONE] strength=0.95 | single: PSNR=20.1087, SSIM=0.5229 | seven: PSNR=23.2137, SSIM=0.7376
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_seven_frame_mild100 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/seven_frame/mild100 --sample-dir outputs/generalization_tsr_wgan/seven_frame/mild100/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_seven_frame_mild100.txt --save-images --max-save 10
+
+[RUN] /root/DL_AdaptiveOptics/.venv/bin/python eval.py --config configs/default.yaml --checkpoint checkpoints/best_tsr_wgan.pt --model-type gan --split test --test-root /root/DL_AdaptiveOptics/data/eval_single_frame_mild100 --batch-size 1 --num-workers 0 --out-dir outputs/generalization_tsr_wgan/single_frame/mild100 --sample-dir outputs/generalization_tsr_wgan/single_frame/mild100/samples --metrics-path outputs/generalization_tsr_wgan/metrics/metric_single_frame_mild100.txt --save-images --max-save 10
+[DONE] strength=1.00 | single: PSNR=19.3321, SSIM=0.4257 | seven: PSNR=20.2331, SSIM=0.4800
+
+[SUMMARY] CSV: outputs/generalization_tsr_wgan/summary/strength_sweep_metrics.csv
+[SUMMARY] PSNR plot: outputs/generalization_tsr_wgan/summary/psnr_vs_turbulence_strength.png
+[SUMMARY] SSIM plot: outputs/generalization_tsr_wgan/summary/ssim_vs_turbulence_strength.png
