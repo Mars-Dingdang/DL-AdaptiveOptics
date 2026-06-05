@@ -34,7 +34,7 @@
 \maketitle
 
 \begin{abstract}
-Atmospheric turbulence introduces spatially varying blur, geometric warping, and temporal instability that significantly degrade long-range remote sensing imagery. Unlike standard image corruption, turbulence is non-uniform across space and time, which makes direct restoration difficult and also makes paired real-world supervision scarce. In this project, we formulate adaptive atmospheric turbulence restoration for remote sensing as a supervised image-to-image translation problem driven by physically simulated degradations. We build a compact training pipeline on top of UC Merced Land Use and NWPU-RESISC45 imagery, synthesize turbulence-corrupted seven-frame sequences with a TurbulenceSim-based simulator, and train a multi-frame U-Net baseline that stacks temporal observations along the channel dimension. On the validation split, the resulting model reaches 35.34 dB PSNR and 0.9804 SSIM, while qualitative results show improved recovery of roads, parking lots, buildings, and man-made boundaries under strong blur and local distortion. Code and assets are available at \url{https://github.com/Mars-Dingdang/DL-AdaptiveOptics}, and the dataset release is available at \url{https://huggingface.co/datasets/Mars-Dingdang/DL-AdaptiveOptics}.
+Atmospheric turbulence introduces spatially varying blur, geometric warping, and temporal instability that significantly degrade long-range remote sensing imagery. Unlike standard image corruption, turbulence is non-uniform across space and time, which makes direct restoration difficult and also makes paired real-world supervision scarce. In this project, we formulate adaptive atmospheric turbulence restoration for remote sensing as a supervised image-to-image translation problem driven by physically simulated degradations. We build a compact training pipeline on top of UC Merced Land Use and NWPU-RESISC45 imagery, synthesize turbulence-corrupted seven-frame sequences with a TurbulenceSim-based simulator, and train both a multi-frame U-Net baseline and a TSR-WGAN model. On the validation split, the best U-Net reaches 35.34 dB PSNR and 0.9804 SSIM, while TSR-WGAN reaches 34.14 dB PSNR and 0.9712 SSIM after training on mixed turbulence strengths. Qualitative results show improved recovery of roads, parking lots, buildings, and man-made boundaries under strong blur and local distortion. Code and assets are available at \url{https://github.com/Mars-Dingdang/DL-AdaptiveOptics}, and the dataset release is available at \url{https://huggingface.co/datasets/Mars-Dingdang/DL-AdaptiveOptics}.
 \end{abstract}
 
 \section{Introduction}
@@ -148,13 +148,30 @@ The distinctive design choice is the input representation. Instead of restoring 
 
 With 21 input channels, 3 output channels, and base width 64, the network contains approximately 31.0 million trainable parameters. Although this is still a standard architecture rather than a specialized transformer or diffusion model, it provides a useful baseline for understanding how much performance can be extracted from physical simulation plus temporal stacking alone.
 
-% TODO: Insert an illustration for Input -> TurbulenceSim -> 7-frame degradation -> U-Net architecture -> restored image.
-
-\begin{figure}[H]
+\begin{figure}[htbp]
     \centering
     \includegraphics[width=0.9\textwidth]{images/AI-image.png}
     \caption{Schematic of the multi-frame U-Net architecture and data pipeline (GPT-image-2 generated).}
 \end{figure}
+
+\subsubsection{TSR-WGAN}
+We also implement a TSR-WGAN model adapted from the turbulence sequence restoration network of Jin et al.~\citep{jin2021}. Unlike the U-Net baseline, which stacks all seven frames directly as 21 image channels, TSR-WGAN keeps the input as a sequence tensor $B\times7\times3\times H\times W$ and explicitly separates per-frame feature alignment, temporal integration, image reconstruction, and adversarial scoring. In the active configuration, the generator has approximately 46.0 million trainable parameters and the critic has approximately 1.7 million trainable parameters.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.9\textwidth]{images/WGAN.png}
+    \caption{Schematic of the TSR-WGAN architecture and data pipeline (Nano Banana 2 generated).}
+\end{figure}
+
+The generator first applies a shared per-frame alignment module to each RGB frame. This module maps each frame from 3 channels to 8 feature channels with a $3\times3$ convolution and then builds a three-level feature pyramid. The first level operates at the original resolution, the second and third levels are produced by stride-2 $3\times3$ convolutions, and residual blocks with instance normalization refine the features at each level. Coarser features are bilinearly upsampled and added back into finer levels, so the final aligned feature for each frame remains an 8-channel full-resolution map.
+
+After alignment, the generator uses the middle frame as the temporal reference. For every neighboring frame, the code multiplies its aligned feature with the center-frame feature, passes the product through a $7\times7$ convolution, and applies a channel-wise softmax to obtain a correlation map. The aligned feature sequence is then reweighted by these maps, which gives the generator a lightweight temporal attention mechanism before explicit 3D integration.
+
+The temporal-spatial integration block receives the reweighted feature volume. With seven input frames, it uses four overlapping temporal windows of length four. Each window is processed by a padded $3$D convolution with kernel size $4\times5\times5$, producing 16-channel features. The four outputs are concatenated along the temporal axis and fused by another $3$D convolution whose temporal kernel spans the concatenated sequence, producing a $64\times H\times W$ representation. The reconstruction trunk then applies a $7\times7$ convolution from 64 to 128 channels, two stride-2 downsampling stages to 256 and 512 channels, nine residual blocks at the bottleneck, two transposed-convolution upsampling stages back to 128 channels, and a final $7\times7$ convolution to RGB. The model learns a residual correction: the reconstructed output is added to the center degraded frame and passed through a \texttt{tanh} activation.
+
+The critic scores a five-frame clip centered in the seven-frame sequence. For a real clip, the center degraded frame is replaced by the clean target; for a fake clip, it is replaced by the generator output. The selected five RGB frames are flattened to 15 channels. The critic has a global branch with repeated stride-2 convolutions up to 512 channels followed by an 8-channel score map, and a local branch that crops a random $25\times25$ patch, applies two stride-2 convolutions and a final convolution to produce a local score map. The local map is adaptively pooled to the global-map size, concatenated with the global output, and averaged by the WGAN loss.
+
+
 
 \subsection{Objectives and training details}
 \subsubsection{Metrics and objective}
@@ -180,19 +197,38 @@ so higher values indicate smaller pixel-wise distortion. SSIM, following Wang et
 \end{equation}
 where $\mu_x$ and $\mu_y$ are local means, $\sigma_x^2$ and $\sigma_y^2$ are local variances, $\sigma_{xy}$ is local covariance, and $c_1,c_2$ are stabilizing constants. In this report, PSNR is used as the primary selection metric, while SSIM is reported to summarize structural fidelity.
 
-\subsubsection{Training details}
-Training is launched through the unified script but dispatched to a dedicated U-Net entry point. The optimizer is Adam with learning rate 2\,$\times$\,$10^{-4}$, $\beta_1=0.5$, $\beta_2=0.999$, and zero weight decay. A StepLR scheduler halves the learning rate every 30 epochs. The model is trained for 50 epochs using automatic mixed precision when CUDA is available. The per-process training batch size is 64 and validation batch size is 8.
+For TSR-WGAN, training follows the WGAN-GP formulation \citep{arjovsky2017wgan,gulrajani2017wgangp}. Let $s$ denote a seven-frame degraded sequence, $x$ the clean target, $\hat{x}=G(s)$ the generated restoration, and $\mathcal{C}(s,z)$ the five-frame critic input formed by replacing the center frame of the selected degraded clip with image $z$ and flattening the clip into 15 channels. The critic compares the real input $\mathcal{C}(s,x)$ against the fake input $\mathcal{C}(s,\hat{x})$. Its loss is
+\begin{equation}
+\mathcal{L}_D
+= \mathbb{E}\left[D(\mathcal{C}(s,\hat{x}))\right]
+- \mathbb{E}\left[D(\mathcal{C}(s,x))\right]
++ \lambda_{gp}\,\mathbb{E}_{\tilde{c}}
+\left[\left(\left\|\nabla_{\tilde{c}}D(\tilde{c})\right\|_2 - 1\right)^2\right],
+\end{equation}
+where $\tilde{c}=\alpha\mathcal{C}(s,x)+(1-\alpha)\mathcal{C}(s,\hat{x})$ and $\alpha\sim U(0,1)$. The generator combines the adversarial term, a VGG19 perceptual loss, and a pixel MSE term:
+\begin{equation}
+\mathcal{L}_G
+= -\mathbb{E}\left[D(\mathcal{C}(s,\hat{x}))\right]
++ \lambda_{perc}\left\|\Phi(\hat{x})-\Phi(x)\right\|_1
++ \lambda_{pix}\left\|\hat{x}-x\right\|_2^2,
+\end{equation}
+where $\Phi$ denotes frozen VGG19 features up to layer 14. In the active configuration, $\lambda_{gp}=10$, $\lambda_{perc}=10$, and $\lambda_{pix}=10000$. TSR-WGAN is trained and scored in the normalized $[-1,1]$ range, then converted back to $[0,1]$ for PSNR and SSIM.
 
-The code also supports distributed data parallel training through torchrun. When launched with multiple GPUs, the project initializes an NCCL process group, assigns one GPU per process, uses distributed samplers, and aggregates metrics across ranks. This is especially relevant for the current setting because sequence inputs increase memory pressure compared with single-frame restoration. In our configuration, the loss is plain $L_1$ between the restored image and the clean target, and checkpoint selection is based on validation PSNR.
+\subsubsection{Training details}
+Training is launched through the unified script but dispatched to model-specific entry points. For the U-Net experiments, the optimizer is Adam with learning rate 2\,$\times$\,$10^{-4}$, $\beta_1=0.5$, $\beta_2=0.999$, and zero weight decay. A StepLR scheduler halves the learning rate every 30 epochs. The U-Net models are trained for 50 epochs using automatic mixed precision when CUDA is available. The per-process training batch size is 64 and validation batch size is 8.
+
+For TSR-WGAN, the configuration balances the mild50 and mild75 LMDB training roots and uses a sequence tensor input. The generator optimizer is Adam with learning rate 3\,$\times$\,$10^{-4}$, while the critic optimizer uses learning rate 1\,$\times$\,$10^{-5}$; both use $\beta_1=0.9$, $\beta_2=0.999$, and zero weight decay. One critic update is performed for each generator update. The model is trained for 30 epochs with batch size 12 and validation batch size 12. Mixed precision is disabled in this path because WGAN-GP gradient penalty training is unstable under automatic mixed precision. A ReduceLROnPlateau scheduler is enabled for both optimizers with factor 0.5 and patience 5.
+
+The code also supports distributed data parallel training through torchrun. When launched with multiple GPUs, the project initializes an NCCL process group, assigns one GPU per process, uses distributed samplers, and aggregates metrics across ranks. This is especially relevant for the current setting because sequence inputs increase memory pressure compared with single-frame restoration. For all reported checkpoints, model selection is based on validation PSNR.
 
 \section{Results and Analysis}
 \subsection{Quantitative results}
 \subsubsection{Validation performance}
-The best U-Net checkpoint evaluated on the validation split reaches the metrics shown in Table~\ref{tab:quantitative}. The reported values come from the repository output generated by the evaluation pipeline.
+The best U-Net and TSR-WGAN checkpoints evaluated on the validation split reach the metrics shown in Table~\ref{tab:quantitative}. The reported values come from the repository output generated by the evaluation pipeline.
 
 \begin{table}[H]
     \centering
-    \caption{Validation performance of the 1-frame/7-frame U-Net restoration model.}
+    \caption{Validation performance of the U-Net and TSR-WGAN restoration models.}
     \label{tab:quantitative}
     \begin{tabular}{lcccc}
         \toprule
@@ -202,11 +238,12 @@ The best U-Net checkpoint evaluated on the validation split reaches the metrics 
         U-Net baseline & 1 frame & 0.5 & 31.483 & 0.9581 \\
         U-Net baseline & 7 frames stacked & 0.75 & 31.783 & 0.9557 \\
         U-Net baseline & 1 frame & 0.75 & 29.463 & 0.9256 \\
+        TSR-WGAN & 7 frames sequence & mixed 0.5/0.75 & 34.144 & 0.9712 \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-The absolute values indicate that the model recovers a large portion of the structural signal from the simulated degradation. A PSNR above 35 dB on 256\,$\times$\,256 remote sensing patches suggests that the network is not merely smoothing the image, but is reconstructing scene content in a way that remains close to the clean target. The SSIM value of 0.9804 further supports that most structural layout and local contrast relationships are preserved.
+The absolute values indicate that both model families recover a large portion of the structural signal from the simulated degradation. A PSNR above 35 dB for the best U-Net on 256\,$\times$\,256 remote sensing patches suggests that the network is not merely smoothing the image, but is reconstructing scene content in a way that remains close to the clean target. TSR-WGAN reaches a slightly lower but still strong validation score of 34.144 dB PSNR and 0.9712 SSIM, which is notable because it is trained on a mixed 0.50/0.75 turbulence distribution rather than a single mild setting.
 
 At the same time, these numbers should be interpreted carefully. The evaluation uses synthetic degradations drawn from the same simulator family as training, so the results primarily measure how well the network learns to invert the chosen physical data model. They do not yet guarantee the same level of performance on real atmospheric turbulence data. This gap between simulated and real degradation remains one of the key limitations of turbulence restoration research. We will dive deeper into this issue in the following parts.
 
@@ -321,9 +358,48 @@ However, when we studied the generalization performance of the 7-frame U-Net mod
 
 The peak performance at 0.70 test-time turbulence strength is unexpected, showing an equilibrium between remembering the degradation distribution and easiness of restoration. For lower turbulence strength, the model may be overfitting to the stronger degradation seen in training, while for higher turbulence strength the restoration task becomes more difficult and the model's learned features may not be sufficient to recover the clean image. This non-monotonic behavior suggests that the model's generalization is influenced by a complex interplay between the training degradation distribution and the test-time degradation, which could be an interesting direction for further investigation.
 
-\subsection{Qualitative results}
+Finally, we evaluate the TSR-WGAN model trained on the mixed 0.50 and 0.75 turbulence-strength datasets. The results are shown in Table~\ref{tab:generalization_tsr_wgan} and Figure~\ref{fig:generalization_tsr_wgan}. In contrast to the 0.75-trained U-Net, TSR-WGAN shows an almost monotonic decrease as test turbulence strength increases. The seven-frame input remains consistently better than the single-frame setting, and the gap becomes very large in the moderate and strong turbulence ranges: at 0.75 strength, TSR-WGAN obtains 29.69 dB with seven frames compared with 23.60 dB with a single frame. This indicates that the temporal-spatial generator and clip-based critic use sequence information more aggressively than the channel-stacked U-Net baseline.
+
+\begin{table}[H]
+    \centering
+    \caption{Generalization performance of TSR-WGAN trained on mixed 0.50 and 0.75 turbulence strengths across different turbulence strengths and input settings.}
+    \label{tab:generalization_tsr_wgan}
+    \begin{tabular}{lcccc}
+        \toprule
+        Turbu-strength & PSNR (1 frame) $\uparrow$ & SSIM (1 frame) $\uparrow$ & PSNR (7 frames) $\uparrow$ & SSIM (7 frames) $\uparrow$ \\
+        \midrule
+        0.5 & \textbf{28.70} & \textbf{0.9421} & \textbf{32.35} & \textbf{0.9714} \\
+        0.55 & 27.61 & 0.9254 & 31.86 & 0.9677 \\
+        0.6 & 26.55 & 0.9041 & 31.36 & 0.9636 \\
+        0.65 & 25.53 & 0.8773 & 30.84 & 0.9588 \\
+        0.7 & 24.55 & 0.8439 & 30.30 & 0.9530 \\
+        0.75 & 23.60 & 0.8023 & 29.69 & 0.9451 \\
+        0.8 & 22.69 & 0.7510 & 28.89 & 0.9326 \\
+        0.85 & 21.80 & 0.6879 & 27.71 & 0.9092 \\
+        0.9 & 20.94 & 0.6118 & 25.89 & 0.8593 \\
+        0.95 & 20.11 & 0.5229 & 23.21 & 0.7376 \\
+        1.0 & 19.33 & 0.4257 & 20.23 & 0.4800 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
 
 \begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.45\textwidth}
+        \includegraphics[width=\textwidth]{images/tsr_wgan_psnr_vs_turbulence_strength.png}
+        \caption{PSNR across turbulence strengths.}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.45\textwidth}
+        \includegraphics[width=\textwidth]{images/tsr_wgan_ssim_vs_turbulence_strength.png}
+        \caption{SSIM across turbulence strengths.}
+    \end{subfigure}
+    \caption{Generalization performance of TSR-WGAN trained on mixed 0.50 and 0.75 turbulence strengths across different turbulence strengths and input settings.}
+    \label{fig:generalization_tsr_wgan}
+\end{figure}
+
+\subsection{Qualitative results}
+
+\begin{figure}[htbp]
     \centering
     % \includegraphics[width=0.88\linewidth]{images/gif00000_4.png}
     % \vspace{0.5em}
@@ -336,7 +412,7 @@ Figure~\ref{fig:qualitative} shows representative restoration examples from the 
 
 Figure~\ref{fig:qualitative75} shows representative restoration examples from the validation set with 0.75 training time turbulence strength. Compared to the generalization results in Figure~\ref{fig:generalization}, the restoration resolution is relatively high for 0.75 turbulence strength. One difference seen by naked eye is that the color saturation of the restored images are slightly lower than those of the ground truth.
 
-\begin{figure}[H]
+\begin{figure}[htbp]
     \centering
     \includegraphics[width=0.8\linewidth]{images/mild75-val1.png}
     \includegraphics[width=0.8\linewidth]{images/mild75-val2.png}
@@ -344,9 +420,16 @@ Figure~\ref{fig:qualitative75} shows representative restoration examples from th
     \label{fig:qualitative75}
 \end{figure}
 
-% Figure~\ref{fig:compareunet} shows the comparison between U-Net models trained on 1-frame input and 7-frame input. The examples are selected from the validation set with turbulence strength 0.50. The 7-frame model produces sharper reconstructions of roads, parking lots, buildings, and scene boundaries compared to the 1-frame model, which still recovers some structure but with more blur and less detail.
+Figure~\ref{fig:tsr_wgan_qualitative} shows a representative TSR-WGAN validation result. The prediction preserves the dominant landform boundaries and large texture regions, but the output is slightly darker and smoother than the clean target. This behavior is consistent with the quantitative result: TSR-WGAN is competitive, but its perceptual and adversarial terms do not automatically guarantee higher PSNR than the direct U-Net reconstruction objective on this simulator-domain validation split.
 
-\begin{figure}[H]
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\linewidth]{images/tsr_wgan_val_00006.png}
+    \caption{Representative TSR-WGAN restoration example from the validation set. From left to right: degraded input, clean target, and TSR-WGAN prediction.}
+    \label{fig:tsr_wgan_qualitative}
+\end{figure}
+
+\begin{figure}[htbp]
     \centering
     \includegraphics[width=0.8\linewidth]{images/seven6.png}
     \includegraphics[width=0.8\linewidth]{images/single6.png}
@@ -355,12 +438,12 @@ Figure~\ref{fig:qualitative75} shows representative restoration examples from th
 \end{figure}
 Figure~\ref{fig:compare60} shows the restoration results of the 7-frame U-Net model when test-time input is one-frame and seven-frame with turbulence strength 0.60. The results demonstrate some slight differences, e.g. the white building roof is more clearly restored in the seven-frame input case.
 
+
 Figure~\ref{fig:compares} shows the comparison between different turbulence strengths (0.50, 0.75, 1.0) with 7-frame input. The results show that the restoration performance drops significantly as turbulence strength increases. 
 \begin{itemize}
     \item For the 7-frame U-Net model trained on 0.50 turbulence strength, the restoration performance drops significantly as turbulence strength increases. The restored images with 0.75 turbulence strength still have some blur in fine details, while the restored images with 1.0 turbulence strength are severely blurred and distorted.
     \item For the 7-frame U-Net model trained on 0.75 turbulence strength, the problem of restoration performance at 0.50 test-time turbulence strength is that the constrast of the images are too high; while for 1.0 test-time turbulence strength, the restored images are still blurred. Moreover, we spotted a black patch in the restored images.
-\end{itemize}
-\begin{figure}[H]
+\begin{figure}[htbp]
     \begin{subfigure}[b]{0.33\textwidth}
         \includegraphics[width=\textwidth]{images/501.png}
         \\
@@ -409,32 +492,100 @@ Figure~\ref{fig:compares} shows the comparison between different turbulence stre
         \includegraphics[width=\textwidth]{images/10675.png}
         \caption{Turbulence strength 1.0.}
     \end{subfigure}
-    \caption{Comparison of restoration results across different turbulence strengths (0.50, 0.75, 1.0) with 7-frame input. Figure (a), (b), (c) are the results of the 7-frame U-Net model trained on 0.50 turbulence strength, while Figure (d), (e), (f) are the results of the 7-frame U-Net model trained on 0.75 turbulence strength.}
+    \begin{subfigure}[b]{0.33\textwidth}
+        \includegraphics[width=\textwidth]{images/501gan.png}
+        \\
+        \includegraphics[width=\textwidth]{images/502gan.png}
+        \\
+        \includegraphics[width=\textwidth]{images/506gan.png}
+        \caption{Turbulence strength 0.50.}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.33\textwidth}
+        \includegraphics[width=\textwidth]{images/751gan.png}
+        \\
+        \includegraphics[width=\textwidth]{images/752gan.png}
+        \\
+        \includegraphics[width=\textwidth]{images/756gan.png}
+        \caption{Turbulence strength 0.75.}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.33\textwidth}
+        \includegraphics[width=\textwidth]{images/101gan.png}
+        \\
+        \includegraphics[width=\textwidth]{images/102gan.png}
+        \\
+        \includegraphics[width=\textwidth]{images/106gan.png}
+        \caption{Turbulence strength 1.0.}
+    \end{subfigure}
+    \caption{Comparison of restoration results across different turbulence strengths (0.50, 0.75, 1.0) with 7-frame input. Figure (a), (b), (c) are the results of the 7-frame U-Net model trained on 0.50 turbulence strength, while Figure (d), (e), (f) are the results of the 7-frame U-Net model trained on 0.75 turbulence strength. Figure (g), (h), (i) are the results of TSR-WGAN trained on mixed 0.50 and 0.75 turbulence strengths.}
     \label{fig:compares}
 \end{figure}
+    \item For TSR-WGAN, seven-frame inference is much more stable than single-frame inference. At 0.50 and 0.75 turbulence strength, the seven-frame predictions retain smoother boundaries and fewer local distortions. At 1.0 strength, both settings become blurry, but the seven-frame output still preserves more coherent large-scale structure.
+\end{itemize}
+% \begin{figure}[H]
+%     \centering
+%     \begin{subfigure}[b]{0.33\textwidth}
+%         \includegraphics[width=\textwidth]{images/tsr_wgan_single_mild50_00006.png}
+%         \caption{Single frame, 0.50.}
+%     \end{subfigure}
+%     \begin{subfigure}[b]{0.33\textwidth}
+%         \includegraphics[width=\textwidth]{images/tsr_wgan_single_mild75_00006.png}
+%         \caption{Single frame, 0.75.}
+%     \end{subfigure}
+%     \begin{subfigure}[b]{0.33\textwidth}
+%         \includegraphics[width=\textwidth]{images/tsr_wgan_single_mild100_00006.png}
+%         \caption{Single frame, 1.00.}
+%     \end{subfigure}
+%     \begin{subfigure}[b]{0.33\textwidth}
+%         \includegraphics[width=\textwidth]{images/tsr_wgan_seven_mild50_00006.png}
+%         \caption{Seven frames, 0.50.}
+%     \end{subfigure}
+%     \begin{subfigure}[b]{0.33\textwidth}
+%         \includegraphics[width=\textwidth]{images/tsr_wgan_seven_mild75_00006.png}
+%         \caption{Seven frames, 0.75.}
+%     \end{subfigure}
+%     \begin{subfigure}[b]{0.33\textwidth}
+%         \includegraphics[width=\textwidth]{images/tsr_wgan_seven_mild100_00006.png}
+%         \caption{Seven frames, 1.00.}
+%     \end{subfigure}
+%     \caption{TSR-WGAN qualitative generalization comparison across turbulence strengths and input settings. Each panel shows degraded input, clean target, and prediction.}
+%     \label{fig:tsr_wgan_generalization_samples}
+% \end{figure}
+
 
 \subsection{Discussion}
-The results point to several insights beyond the raw validation scores. First, temporal stacking is consistently useful. Under the 0.50 training-time turbulence setting, the 7-frame U-Net reaches 35.341 dB PSNR and 0.9804 SSIM, compared with 31.483 dB and 0.9581 SSIM for the corresponding 1-frame model. Under the stronger 0.75 setting, the 7-frame model also outperforms the 1-frame model, with 31.783 dB and 0.9557 SSIM versus 29.463 dB and 0.9256 SSIM. The improvement is therefore not restricted to an easy degradation regime. The model benefits from multiple degraded observations because different frames preserve different local structures after random warping and blur. The qualitative comparisons support this interpretation: roads, rooftops, parking boundaries, and building edges are sharper when seven frames are available.
+The results point to several insights beyond the raw validation scores. First, temporal information is consistently useful across both architectures. Under the 0.50 training-time turbulence setting, the 7-frame U-Net reaches 35.341 dB PSNR and 0.9804 SSIM, compared with 31.483 dB and 0.9581 SSIM for the corresponding 1-frame model. Under the stronger 0.75 setting, the 7-frame model also outperforms the 1-frame model, with 31.783 dB and 0.9557 SSIM versus 29.463 dB and 0.9256 SSIM. TSR-WGAN shows the same trend even more strongly in the generalization sweep: at 0.75 test strength, seven-frame inference improves PSNR from 23.60 dB to 29.69 dB. The model benefits from multiple degraded observations because different frames preserve different local structures after random warping and blur.
 
-Second, the new 0.75-strength experiments show that training turbulence strength behaves like a degradation-domain prior rather than a simple robustness knob. The model trained at 0.50 performs best when the test degradation is also mild, and its generalization curves decrease almost monotonically as turbulence strength increases. In contrast, the model trained at 0.75 does not peak at the easiest test setting. Its best performance appears around 0.70 test-time turbulence strength for both 1-frame and 7-frame inputs. This non-monotonic pattern suggests a mismatch effect: a model trained mainly to undo stronger blur and warping can over-correct or distort images from milder turbulence, while still struggling once the test corruption becomes more severe than the training distribution. The visual comparison at 0.50 test-time strength, where the 0.75-trained model tends to produce overly high contrast, is consistent with this explanation.
+Second, the U-Net experiments show that training turbulence strength behaves like a degradation-domain prior rather than a simple robustness knob. The model trained at 0.50 performs best when the test degradation is also mild, and its generalization curves decrease almost monotonically as turbulence strength increases. In contrast, the model trained at 0.75 does not peak at the easiest test setting. Its best performance appears around 0.70 test-time turbulence strength for both 1-frame and 7-frame inputs. This non-monotonic pattern suggests a mismatch effect: a model trained mainly to undo stronger blur and warping can over-correct or distort images from milder turbulence, while still struggling once the test corruption becomes more severe than the training distribution. The visual comparison at 0.50 test-time strength, where the 0.75-trained model tends to produce overly high contrast, is consistent with this explanation.
 
-Third, the 7-frame advantage remains visible across both generalization studies, but the size of the advantage depends on the degradation regime. For the 0.50-trained model, seven frames are clearly better than one frame at every tested strength, although the absolute performance drops sharply as turbulence approaches 1.0. For the 0.75-trained model, the multi-frame gain becomes especially important near the moderate-strength region where the model is best matched to the test distribution: at 0.70, the 7-frame result exceeds the 1-frame result by more than 3 dB PSNR. This indicates that temporal redundancy is most useful when the input sequence still contains recoverable but differently corrupted evidence. When turbulence becomes too strong, the sequence supplies more observations, but those observations may all have lost the same fine-scale information.
+Third, TSR-WGAN occupies a different point in the tradeoff. Its validation score of 34.144 dB and 0.9712 SSIM is below the best in-distribution 0.50 U-Net, but it is trained on mixed 0.50 and 0.75 data and remains comparatively strong over a wider moderate-strength range. In particular, its seven-frame PSNR at 0.75 strength is 29.69 dB, above the 0.50-trained U-Net under the same test strength and close to the 0.75-trained U-Net. At 0.80 and 0.85, TSR-WGAN also keeps higher seven-frame PSNR and SSIM than the single-strength U-Net generalization baselines. This suggests that the temporal-spatial integration block and clip-based critic help the model exploit sequence redundancy under degradation mismatch.
 
-Finally, the experiments clarify the limits of the current baseline. A single U-Net trained at one turbulence strength does not provide uniform restoration quality across all turbulence levels. The 0.50 model gives excellent in-distribution restoration, but its performance degrades rapidly under stronger turbulence. The 0.75 model is better matched to moderate degradation, but it sacrifices mild-case performance and still leaves blur or artifacts at 1.0 strength. These findings suggest that future models should either train on a broader turbulence-strength distribution or explicitly condition the network on degradation parameters such as estimated strength, wind, or blur severity. The current results are therefore best interpreted as a strong simulator-domain baseline and an informative ablation of temporal input and degradation mismatch, rather than as evidence of complete robustness to real atmospheric turbulence.
+Fourth, the adversarial objective does not automatically improve pixel metrics. TSR-WGAN includes WGAN-GP, VGG perceptual loss, and a large pixel-MSE term, so it is encouraged to produce realistic local structure while still staying close to the target. Even so, the direct $L_1$ U-Net objective remains best for mild in-distribution validation PSNR. Qualitatively, TSR-WGAN can preserve coherent large-scale boundaries, but its outputs sometimes appear darker or smoother than the ground truth. This is a common tension in restoration: adversarial and perceptual losses can improve visual plausibility, but PSNR and SSIM still reward conservative pixel alignment.
+
+Finally, the experiments clarify the limits of the current system. A single U-Net trained at one turbulence strength does not provide uniform restoration quality across all turbulence levels. TSR-WGAN trained on mixed strengths improves moderate-range robustness, but it also degrades sharply near turbulence strength 1.0, where much of the fine-scale information is lost in every frame. These findings suggest that future models should train on broader or continuous turbulence-strength distributions, explicitly condition the network on degradation parameters such as estimated strength, wind, or blur severity, and test on real turbulence sequences to quantify the simulation-to-reality gap.
 
 \section{Conclusion}
-This project studies adaptive atmospheric turbulence restoration for remote sensing images through a compact but physically grounded learning pipeline. We combine clean remote sensing imagery from UC Merced and NWPU-RESISC45, a TurbulenceSim-style simulator for generating paired turbulence sequences, and U-Net restoration models trained with an $L_1$ objective. The best 0.50-strength 7-frame model achieves 35.34 dB PSNR and 0.9804 SSIM on the validation split, while the stronger 0.75-strength setting still reaches 31.78 dB PSNR and 0.9557 SSIM with seven-frame input. Across both settings, multi-frame restoration consistently outperforms the corresponding single-frame baseline.
+This project studies adaptive atmospheric turbulence restoration for remote sensing images through a compact but physically grounded learning pipeline. We combine clean remote sensing imagery from UC Merced and NWPU-RESISC45, a TurbulenceSim-style simulator for generating paired turbulence sequences, and two restoration families: a channel-stacked multi-frame U-Net and a sequence-aware TSR-WGAN. The best 0.50-strength 7-frame U-Net achieves 35.34 dB PSNR and 0.9804 SSIM on the validation split, while the stronger 0.75-strength U-Net setting still reaches 31.78 dB PSNR and 0.9557 SSIM. TSR-WGAN, trained on mixed 0.50 and 0.75 turbulence data, reaches 34.14 dB PSNR and 0.9712 SSIM on the validation split.
 
-The main contribution of the project is a reproducible remote-sensing turbulence restoration pipeline that connects physically motivated synthetic degradation, sequence-based input aggregation, and quantitative evaluation across turbulence strengths. The new generalization experiments show that temporal information is valuable, but also that degradation mismatch matters: a model trained on mild turbulence performs very well in distribution but degrades under stronger corruption, while a model trained on 0.75 turbulence is better tuned to moderate degradation and can underperform on milder inputs because of over-restoration effects.
+The main contribution of the project is a reproducible remote-sensing turbulence restoration pipeline that connects physically motivated synthetic degradation, sequence-based input aggregation, adversarial sequence restoration, and quantitative evaluation across turbulence strengths. The generalization experiments show that temporal information is valuable for both models, but also that degradation mismatch matters. The 0.50 U-Net performs very well in distribution but degrades under stronger corruption; the 0.75 U-Net is better tuned to moderate degradation but can over-restore milder inputs; and TSR-WGAN provides stronger mixed-strength robustness in the moderate range while still struggling under the most severe turbulence.
 
-These findings point to several next steps. A stronger system should train on mixed or continuous turbulence strengths, condition the restoration network on degradation parameters, and compare U-Net results against the GAN and diffusion models already scaffolded in the repository. Broader data coverage and real turbulence evaluation are also necessary to measure the simulation-to-reality gap. Overall, the current work provides a strong baseline and a clearer empirical lesson: multi-frame evidence improves restoration, but robust adaptive optics restoration also requires explicit handling of turbulence-strength variation.
+These findings point to several next steps. A stronger system should train on mixed or continuous turbulence strengths, condition the restoration network on degradation parameters, and extend the comparison to the diffusion models already scaffolded in the repository. Broader data coverage and real turbulence evaluation are also necessary to measure the simulation-to-reality gap. Overall, the current work provides a strong baseline and a clear empirical lesson: multi-frame evidence improves restoration, but robust adaptive optics restoration also requires explicit handling of turbulence-strength variation.
 
 \begin{thebibliography}{9}
+
+\bibitem[Arjovsky et~al.(2017)]{arjovsky2017wgan}
+Martin Arjovsky, Soumith Chintala, and Leon Bottou.
+Wasserstein generative adversarial networks.
+In \emph{Proceedings of the International Conference on Machine Learning}, 2017.
 
 \bibitem[Chimitt and Chan(2020)]{chimitt2020turbsim}
 Nicholas Chimitt and Stanley H. Chan.
 Simulating anisoplanatic turbulence by sampling inter-modal and spatially correlated Zernike coefficients.
 \emph{arXiv preprint arXiv:2004.11210}, 2020.
+
+\bibitem[Gulrajani et~al.(2017)]{gulrajani2017wgangp}
+Ishaan Gulrajani, Faruk Ahmed, Martin Arjovsky, Vincent Dumoulin, and Aaron C. Courville.
+Improved training of Wasserstein GANs.
+In \emph{Advances in Neural Information Processing Systems}, 2017.
 
 \bibitem[Hill et~al.(2024)]{hill2024review}
 Paul Hill, Nantheera Anantrasirichai, Alin Achim, and David Bull.

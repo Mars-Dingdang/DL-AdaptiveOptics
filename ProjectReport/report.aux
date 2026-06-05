@@ -6,59 +6,71 @@
 \citation{jin2021}
 \citation{jin2021}
 \@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Schematic of imaging through atmospheric turbulence, extracted from \citet  {{jin2021}}.}}{1}{figure.caption.2}\protected@file@percent }
 \citation{jin2021}
 \citation{mei2023lttgan}
 \citation{wang2023ddnm,jaiswal2023physics}
-\citation{chimitt2020turbsim}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Schematic of imaging through atmospheric turbulence, extracted from \citet  {{jin2021}}.}}{2}{figure.caption.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {2}Method}{2}{section.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Data selection}{2}{subsection.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Physical degradation model}{2}{subsection.2.2}\protected@file@percent }
+\citation{chimitt2020turbsim}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Physical degradation model}{3}{subsection.2.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.1}Simple Parametric Degradation}{3}{subsubsection.2.2.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.2}TurbulenceSim Degradation}{3}{subsubsection.2.2.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.3}Visualized Comparison}{4}{subsubsection.2.2.3}\protected@file@percent }
 \@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Comparison of two degradation pipelines.}}{4}{figure.caption.3}\protected@file@percent }
 \providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
 \newlabel{fig:degradation}{{2}{4}{Comparison of two degradation pipelines}{figure.caption.3}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Visualized 7-frame images with turbulence strength ranging from 0.5 to 1.0.}}{4}{figure.caption.4}\protected@file@percent }
-\newlabel{fig:turbulence_strength}{{3}{4}{Visualized 7-frame images with turbulence strength ranging from 0.5 to 1.0}{figure.caption.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Model Architecture}{5}{subsection.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.1}Multi-frame U-Net architecture baseline}{5}{subsubsection.2.3.1}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Schematic of the multi-frame U-Net architecture and data pipeline (GPT-image-2 generated).}}{5}{figure.caption.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Objectives and training details}{5}{subsection.2.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.1}Metrics and objective}{5}{subsubsection.2.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Model Architecture}{4}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.1}Multi-frame U-Net architecture baseline}{4}{subsubsection.2.3.1}\protected@file@percent }
+\citation{jin2021}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Visualized 7-frame images with turbulence strength ranging from 0.5 to 1.0.}}{5}{figure.caption.4}\protected@file@percent }
+\newlabel{fig:turbulence_strength}{{3}{5}{Visualized 7-frame images with turbulence strength ranging from 0.5 to 1.0}{figure.caption.4}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.2}TSR-WGAN}{5}{subsubsection.2.3.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Schematic of the multi-frame U-Net architecture and data pipeline (GPT-image-2 generated).}}{6}{figure.caption.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Schematic of the TSR-WGAN architecture and data pipeline (Nano Banana 2 generated).}}{6}{figure.caption.6}\protected@file@percent }
 \citation{wang2004ssim}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.2}Training details}{6}{subsubsection.2.4.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}Results and Analysis}{6}{section.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Quantitative results}{6}{subsection.3.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.1.1}Validation performance}{6}{subsubsection.3.1.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Validation performance of the 1-frame/7-frame U-Net restoration model.}}{6}{table.caption.6}\protected@file@percent }
-\newlabel{tab:quantitative}{{1}{6}{Validation performance of the 1-frame/7-frame U-Net restoration model}{table.caption.6}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.1.2}Generalization across input settings and turbulence strengths}{7}{subsubsection.3.1.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Generalization performance of the 7-frame U-Net model trained on 0.50 turbulence strength across different turbulence strengths and input settings.}}{7}{table.caption.7}\protected@file@percent }
-\newlabel{tab:generalization}{{2}{7}{Generalization performance of the 7-frame U-Net model trained on 0.50 turbulence strength across different turbulence strengths and input settings}{table.caption.7}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Generalization performance of the 7-frame U-Net model trained on 0.50 turbulence strength across different turbulence strengths and input settings.}}{7}{figure.caption.8}\protected@file@percent }
-\newlabel{fig:generalization}{{5}{7}{Generalization performance of the 7-frame U-Net model trained on 0.50 turbulence strength across different turbulence strengths and input settings}{figure.caption.8}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Generalization performance of the 7-frame U-Net model trained on 0.75 turbulence strength across different turbulence strengths and input settings.}}{8}{table.caption.9}\protected@file@percent }
-\newlabel{tab:generalization75}{{3}{8}{Generalization performance of the 7-frame U-Net model trained on 0.75 turbulence strength across different turbulence strengths and input settings}{table.caption.9}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Generalization performance of the 7-frame U-Net model trained on 0.75 turbulence strength across different turbulence strengths and input settings.}}{8}{figure.caption.10}\protected@file@percent }
-\newlabel{fig:generalization75}{{6}{8}{Generalization performance of the 7-frame U-Net model trained on 0.75 turbulence strength across different turbulence strengths and input settings}{figure.caption.10}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Qualitative results}{8}{subsection.3.2}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Representative restoration examples from the validation set (0.50 training time turbulence strength). From left to right in each row: degraded input, clean target, and U-Net prediction.}}{8}{figure.caption.11}\protected@file@percent }
-\newlabel{fig:qualitative}{{7}{8}{Representative restoration examples from the validation set (0.50 training time turbulence strength). From left to right in each row: degraded input, clean target, and U-Net prediction}{figure.caption.11}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Representative restoration examples from the validation set with 0.75 training time turbulence strength. From left to right in each row: degraded input, clean target, and U-Net prediction.}}{9}{figure.caption.12}\protected@file@percent }
-\newlabel{fig:qualitative75}{{8}{9}{Representative restoration examples from the validation set with 0.75 training time turbulence strength. From left to right in each row: degraded input, clean target, and U-Net prediction}{figure.caption.12}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Comparison between U-Net models trained on 7-frame input (top) and 1-frame input (down) with 0.50 training time and 0.60 test time turbulence strength. }}{9}{figure.caption.13}\protected@file@percent }
-\newlabel{fig:compare60}{{9}{9}{Comparison between U-Net models trained on 7-frame input (top) and 1-frame input (down) with 0.50 training time and 0.60 test time turbulence strength}{figure.caption.13}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Comparison of restoration results across different turbulence strengths (0.50, 0.75, 1.0) with 7-frame input. Figure (a), (b), (c) are the results of the 7-frame U-Net model trained on 0.50 turbulence strength, while Figure (d), (e), (f) are the results of the 7-frame U-Net model trained on 0.75 turbulence strength.}}{10}{figure.caption.14}\protected@file@percent }
-\newlabel{fig:compares}{{10}{10}{Comparison of restoration results across different turbulence strengths (0.50, 0.75, 1.0) with 7-frame input. Figure (a), (b), (c) are the results of the 7-frame U-Net model trained on 0.50 turbulence strength, while Figure (d), (e), (f) are the results of the 7-frame U-Net model trained on 0.75 turbulence strength}{figure.caption.14}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Discussion}{10}{subsection.3.3}\protected@file@percent }
-\bibcite{chimitt2020turbsim}{{1}{2020}{{Chimitt and Chan}}{{}}}
-\@writefile{toc}{\contentsline {section}{\numberline {4}Conclusion}{11}{section.4}\protected@file@percent }
-\bibcite{hill2024review}{{2}{2024}{{Hill et~al.}}{{}}}
-\bibcite{jaiswal2023physics}{{3}{2023}{{Jaiswal et~al.}}{{}}}
-\bibcite{jin2021}{{4}{2021}{{Jin et~al.}}{{}}}
-\bibcite{mei2023lttgan}{{5}{2023}{{Mei and Patel}}{{}}}
-\bibcite{wang2023ddnm}{{6}{2023}{{Wang et~al.}}{{}}}
-\bibcite{wang2004ssim}{{7}{2004}{{Wang et~al.}}{{}}}
-\gdef \@abspage@last{12}
+\citation{arjovsky2017wgan,gulrajani2017wgangp}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Objectives and training details}{7}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.1}Metrics and objective}{7}{subsubsection.2.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.2}Training details}{7}{subsubsection.2.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Results and Analysis}{8}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Quantitative results}{8}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.1.1}Validation performance}{8}{subsubsection.3.1.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Validation performance of the U-Net and TSR-WGAN restoration models.}}{8}{table.caption.7}\protected@file@percent }
+\newlabel{tab:quantitative}{{1}{8}{Validation performance of the U-Net and TSR-WGAN restoration models}{table.caption.7}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.1.2}Generalization across input settings and turbulence strengths}{8}{subsubsection.3.1.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Generalization performance of the 7-frame U-Net model trained on 0.50 turbulence strength across different turbulence strengths and input settings.}}{9}{table.caption.8}\protected@file@percent }
+\newlabel{tab:generalization}{{2}{9}{Generalization performance of the 7-frame U-Net model trained on 0.50 turbulence strength across different turbulence strengths and input settings}{table.caption.8}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Generalization performance of the 7-frame U-Net model trained on 0.50 turbulence strength across different turbulence strengths and input settings.}}{9}{figure.caption.9}\protected@file@percent }
+\newlabel{fig:generalization}{{6}{9}{Generalization performance of the 7-frame U-Net model trained on 0.50 turbulence strength across different turbulence strengths and input settings}{figure.caption.9}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Generalization performance of the 7-frame U-Net model trained on 0.75 turbulence strength across different turbulence strengths and input settings.}}{10}{table.caption.10}\protected@file@percent }
+\newlabel{tab:generalization75}{{3}{10}{Generalization performance of the 7-frame U-Net model trained on 0.75 turbulence strength across different turbulence strengths and input settings}{table.caption.10}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Generalization performance of the 7-frame U-Net model trained on 0.75 turbulence strength across different turbulence strengths and input settings.}}{10}{figure.caption.11}\protected@file@percent }
+\newlabel{fig:generalization75}{{7}{10}{Generalization performance of the 7-frame U-Net model trained on 0.75 turbulence strength across different turbulence strengths and input settings}{figure.caption.11}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Generalization performance of TSR-WGAN trained on mixed 0.50 and 0.75 turbulence strengths across different turbulence strengths and input settings.}}{11}{table.caption.12}\protected@file@percent }
+\newlabel{tab:generalization_tsr_wgan}{{4}{11}{Generalization performance of TSR-WGAN trained on mixed 0.50 and 0.75 turbulence strengths across different turbulence strengths and input settings}{table.caption.12}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Generalization performance of TSR-WGAN trained on mixed 0.50 and 0.75 turbulence strengths across different turbulence strengths and input settings.}}{11}{figure.caption.13}\protected@file@percent }
+\newlabel{fig:generalization_tsr_wgan}{{8}{11}{Generalization performance of TSR-WGAN trained on mixed 0.50 and 0.75 turbulence strengths across different turbulence strengths and input settings}{figure.caption.13}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Qualitative results}{11}{subsection.3.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Representative restoration examples from the validation set (0.50 training time turbulence strength). From left to right in each row: degraded input, clean target, and U-Net prediction.}}{11}{figure.caption.14}\protected@file@percent }
+\newlabel{fig:qualitative}{{9}{11}{Representative restoration examples from the validation set (0.50 training time turbulence strength). From left to right in each row: degraded input, clean target, and U-Net prediction}{figure.caption.14}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Representative restoration examples from the validation set with 0.75 training time turbulence strength. From left to right in each row: degraded input, clean target, and U-Net prediction.}}{12}{figure.caption.15}\protected@file@percent }
+\newlabel{fig:qualitative75}{{10}{12}{Representative restoration examples from the validation set with 0.75 training time turbulence strength. From left to right in each row: degraded input, clean target, and U-Net prediction}{figure.caption.15}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces Representative TSR-WGAN restoration example from the validation set. From left to right: degraded input, clean target, and TSR-WGAN prediction.}}{12}{figure.caption.16}\protected@file@percent }
+\newlabel{fig:tsr_wgan_qualitative}{{11}{12}{Representative TSR-WGAN restoration example from the validation set. From left to right: degraded input, clean target, and TSR-WGAN prediction}{figure.caption.16}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {12}{\ignorespaces Comparison between U-Net models trained on 7-frame input (top) and 1-frame input (down) with 0.50 training time and 0.60 test time turbulence strength. }}{13}{figure.caption.17}\protected@file@percent }
+\newlabel{fig:compare60}{{12}{13}{Comparison between U-Net models trained on 7-frame input (top) and 1-frame input (down) with 0.50 training time and 0.60 test time turbulence strength}{figure.caption.17}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Discussion}{13}{subsection.3.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {13}{\ignorespaces Comparison of restoration results across different turbulence strengths (0.50, 0.75, 1.0) with 7-frame input. Figure (a), (b), (c) are the results of the 7-frame U-Net model trained on 0.50 turbulence strength, while Figure (d), (e), (f) are the results of the 7-frame U-Net model trained on 0.75 turbulence strength. Figure (g), (h), (i) are the results of TSR-WGAN trained on mixed 0.50 and 0.75 turbulence strengths.}}{14}{figure.caption.18}\protected@file@percent }
+\newlabel{fig:compares}{{13}{14}{Comparison of restoration results across different turbulence strengths (0.50, 0.75, 1.0) with 7-frame input. Figure (a), (b), (c) are the results of the 7-frame U-Net model trained on 0.50 turbulence strength, while Figure (d), (e), (f) are the results of the 7-frame U-Net model trained on 0.75 turbulence strength. Figure (g), (h), (i) are the results of TSR-WGAN trained on mixed 0.50 and 0.75 turbulence strengths}{figure.caption.18}{}}
+\bibcite{arjovsky2017wgan}{{1}{2017}{{Arjovsky et~al.}}{{}}}
+\bibcite{chimitt2020turbsim}{{2}{2020}{{Chimitt and Chan}}{{}}}
+\bibcite{gulrajani2017wgangp}{{3}{2017}{{Gulrajani et~al.}}{{}}}
+\bibcite{hill2024review}{{4}{2024}{{Hill et~al.}}{{}}}
+\bibcite{jaiswal2023physics}{{5}{2023}{{Jaiswal et~al.}}{{}}}
+\bibcite{jin2021}{{6}{2021}{{Jin et~al.}}{{}}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Conclusion}{15}{section.4}\protected@file@percent }
+\bibcite{mei2023lttgan}{{7}{2023}{{Mei and Patel}}{{}}}
+\bibcite{wang2023ddnm}{{8}{2023}{{Wang et~al.}}{{}}}
+\bibcite{wang2004ssim}{{9}{2004}{{Wang et~al.}}{{}}}
+\gdef \@abspage@last{16}
